@@ -58,3 +58,16 @@
   running. Restarting the Rust controller restored the finished snapshot from
   a Temporal query, proving the TV state no longer depends only on process
   memory. The controller was left running at `127.0.0.1:3000`.
+- The badge later appeared at `/dev/cu.usbmodem101`. Flashed the validated image
+  to ESP32-S3 revision 0.2; the bootloader confirmed 16 MB flash and the 14 MB
+  factory partition. Live boot passed the 8 MB PSRAM test, rendered through the
+  OLED driver without error, connected to Wi-Fi at `192.168.1.103`, synchronized
+  time, completed verified Temporal Cloud TLS, and polled
+  `temporal-trivia-badges-v1` as `esp32-e83dc1f94c70` / `KEEN-SEAL-70`.
+- Ran a real hardware round. The Workflow recorded `KEEN-SEAL-70 joined`, six
+  completed questions, two correct answers, four wrong answers, one simulated
+  crash, a recovery event, continued work after recovery, a final score of
+  `-2`, and `KEEN-SEAL-70` as winner. This validates real Activity dispatch,
+  button answers, scoring, retry/recovery, deadline completion, and final
+  winner publication. The serial monitor was detached without stopping the
+  badge Worker; the Mac controller remains live at `127.0.0.1:3000`.
