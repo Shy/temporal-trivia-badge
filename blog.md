@@ -204,3 +204,17 @@
   repository has no `origin`, and `gh auth status` reports that the active
   `Shy` token is invalid. No files were staged or pushed before resolving that
   ownership/authentication boundary.
+
+## 2026-08-17 — GitHub authentication repaired
+
+- The apparent recurring token expiration was an incomplete OAuth device flow,
+  not an expiring stored token. `hosts.yml` retained the active `Shy` account
+  name, but `gh auth token` could not retrieve a credential and the macOS
+  Keychain had no GitHub CLI entry. The prior one-time device code then expired
+  while the CLI waited for approval.
+- Removed only the stale local `gh` account entry and completed a fresh browser
+  login. Final verification reports `Shy (keyring)`, API user `Shy`, retrievable
+  credentials, and the expected `repo`, `read:org`, and `gist` scopes.
+- Switched Git operations to SSH. A direct GitHub SSH probe authenticated as
+  `Shy`, so pushes no longer depend on HTTPS credential handling while GitHub
+  API operations continue using the OAuth token stored in Keychain.
