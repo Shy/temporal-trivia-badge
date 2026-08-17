@@ -37,7 +37,7 @@ pub fn build_deck(seed: u64, maximum: usize) -> Result<Vec<Question>> {
     let mut cursors = [0_usize; 4];
     let pattern = [(0, 30_usize), (1, 15_usize), (2, 15_usize), (3, 40_usize)];
     while deck.len() < maximum {
-        let before = deck.len();
+        let mut batch = Vec::with_capacity((maximum - deck.len()).min(100));
         for (bucket_index, count) in pattern {
             let bucket = match bucket_index {
                 0 => &rust,
@@ -46,16 +46,20 @@ pub fn build_deck(seed: u64, maximum: usize) -> Result<Vec<Question>> {
                 _ => &general,
             };
             for _ in 0..count {
-                if deck.len() == maximum || cursors[bucket_index] == bucket.len() {
+                if deck.len() + batch.len() == maximum || cursors[bucket_index] == bucket.len() {
                     break;
                 }
-                deck.push(bucket[cursors[bucket_index]].clone());
+                batch.push(bucket[cursors[bucket_index]].clone());
                 cursors[bucket_index] += 1;
             }
         }
-        if deck.len() == before {
+        if batch.is_empty() {
             break;
         }
+        // Preserve the agreed category weights without presenting each
+        // category as a contiguous run at the start of a round.
+        batch.shuffle(&mut rng);
+        deck.extend(batch);
     }
 
     // If a smaller authored category is exhausted during an unusually fast
@@ -634,6 +638,21 @@ mod tests {
         assert_eq!(deck.iter().filter(|q| q.category == "temporal").count(), 15);
         assert_eq!(deck.iter().filter(|q| q.category == "math").count(), 15);
         assert_eq!(deck.iter().filter(|q| q.category == "general").count(), 40);
+    }
+
+    #[test]
+    fn opening_questions_mix_categories() {
+        let deck = build_deck(7, 100).unwrap();
+        let opening_categories: HashSet<_> = deck
+            .iter()
+            .take(10)
+            .map(|question| question.category.as_str())
+            .collect();
+
+        assert!(
+            opening_categories.len() >= 3,
+            "opening questions should not be a single-category run"
+        );
     }
 
     #[test]

@@ -280,3 +280,29 @@
   ESP32-S3 release build passed again in 2m10s with no warnings. The supervised
   controller restarted as PID 40373, restored the frozen Cloud result, and its
   history endpoint returned the four Memo-bearing rounds newest-first.
+
+## 2026-08-17 — Post-review badge flash validation
+
+- Flashed the reviewed release ELF to the connected ESP32-S3 with
+  `./flash-badge.sh`. Espflash identified the expected 16 MiB device and wrote
+  the 8,041,616-byte application into the explicit 14,680,064-byte factory
+  partition (54.78%).
+- The physical badge completed a clean boot from the new image. The bootloader
+  found 16 MiB flash, the 8 MiB PSRAM memory test passed, and the application
+  retained its stable `KEEN-SEAL-70` callsign.
+- Wi-Fi reconnected to the configured travel-router network. The Worker then
+  logged that it was polling `temporal-trivia-badges-v1`, closing the
+  post-review physical validation gate.
+- Live play immediately exposed that the nominal 30/15/15/40 category mix was
+  appended as four contiguous runs, so a normal round began with all 30 Rust
+  questions. Each weighted batch is now shuffled before scheduling while
+  retaining its exact category counts and unique-question guarantee. A
+  regression test verifies that the opening questions mix at least three
+  categories for the fixed test seed; the full host suite now passes 12 tests
+  with strict Clippy warnings enabled.
+- Clarified the hidden operator entry point in the README: click the `TP7` PCB
+  test pad or press `O` to open the durable Workflow Signal controls.
+- Exercised the supervised Mac crash endpoint during a live Cloud round. The
+  controller process exited, `run-web.sh` restarted it with a new PID, and the
+  state endpoint recovered the same active Workflow with its player, score,
+  latest answer, double-points window, and used 30-second extension intact.

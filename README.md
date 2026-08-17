@@ -124,10 +124,12 @@ history restores the active round after restart.
 Click **START ROUND** after badges show as connected. Only one round can run at
 a time. Badges that begin polling during a round join automatically.
 
-The operator drawer can send durable Workflow Signals for double points,
-Rust-only scheduling, sudden death, or one 30-second extension. Completed
-rounds are stored in Workflow Memo and listed through Temporal Visibility; no
-database or namespace changes are required.
+Open the operator drawer with the small **TP7** test pad in the bottom-right
+corner or the `O` keyboard shortcut. It can send durable Workflow Signals for
+10 seconds of double points, 10 seconds of Rust-only scheduling, sudden death,
+or one 30-second extension. Completed rounds are stored in Workflow Memo and
+listed through Temporal Visibility; no database or namespace changes are
+required.
 
 Optional typed Search Attributes can be registered by an API key with
 namespace-operator permission:
