@@ -1,50 +1,55 @@
 # Durable Trivia
 
-Durable Trivia is a 60-second competitive game where ESP32-S3 conference
+Durable Trivia is a 60-second competitive game where Temporal Replay 2026
 badges are real Rust Temporal Activity Workers. A Rust/Axum controller runs the
 Workflow Worker and a 16:9 scoreboard on a laptop; Temporal Cloud coordinates
 questions, retries unfinished work, and preserves the round through crashes.
 
-- `firmware/` contains the Rust/ESP-IDF badge Worker, OLED UI, buttons,
-  deterministic badge identity, and NVS session state.
-- `shared/` contains the serialized game contract used by both Workers, so the
-  firmware and controller cannot drift independently.
-- `web/` contains the Rust Workflow Worker, operator server, scoreboard, and
-  bundled trivia deck.
+## Start here
 
-See [GAME_SPEC.md](GAME_SPEC.md) for the game rules and [blog.md](blog.md) for
-the engineering log, including the current Rust SDK portability patches.
+- [Firmware setup, building, flashing, and badge controls](firmware/README.md)
+- [Web controller, Temporal Cloud, and scoreboard setup](web/README.md)
+- [Game rules and behavior](GAME_SPEC.md)
+- [Engineering journal](blog.md)
 
-## Requirements
+The firmware and web controller can be developed independently. You only need
+both running for a physical game.
 
-- A Temporal Cloud namespace and API key.
-- A 2.4 GHz Wi-Fi network reachable by the badges and laptop.
+## Architecture
+
+- `firmware/` contains the Rust/ESP-IDF Activity Worker for the
+  [Temporal Replay 2026 Badge](https://badge.temporal.io/), including its OLED
+  UI, button input, deterministic identity, and NVS session state.
+- `web/` contains the Rust Workflow Worker, Axum operator server, 16:9
+  scoreboard, and bundled trivia deck.
+- `shared/` contains the serialized game contract used by both Workers so their
+  Temporal payloads cannot drift independently.
+
+Temporal Cloud is the durable system of record. The laptop may restart and
+badges may disconnect without resetting the active Workflow. Failed or
+abandoned question Activities return to the Task Queue for another badge.
+
+## Shared requirements
+
+- Git.
 - Rust installed with `rustup`.
-- An ESP32-S3 badge with 16 MiB flash and the hardware mapping used by this
-  repository.
-- macOS or Linux for the controller. The provided flashing commands use Unix
-  device paths.
+- A Temporal Cloud namespace and API key.
+- macOS or Linux for the host-side tools.
 
-Install the ESP Rust toolchain and flashing tools:
+Clone the repository and run all documented commands from its root unless a
+guide says otherwise:
 
 ```sh
-cargo install espup --locked
-espup install
-. "$HOME/export-esp.sh"
-cargo install espflash ldproxy
+git clone https://github.com/Shy/temporal-trivia-badge.git
+cd temporal-trivia-badge
 ```
 
-The `espup` export file must be sourced in every terminal used to build the
-firmware. The project pins ESP-IDF v5.4 and selects the
-`xtensa-esp32s3-espidf` target through `.cargo/config.toml`.
+## Shared Temporal configuration
 
-## Configure Temporal Cloud and Wi-Fi
-
-Create the two ignored configuration files:
+Both components use the same ignored Temporal Cloud configuration:
 
 ```sh
 cp .env.temporal.example .env.temporal
-cp firmware/.env.wifi.example firmware/.env.wifi
 ```
 
 Fill in `.env.temporal`:
@@ -55,120 +60,28 @@ TEMPORAL_NAMESPACE=your-namespace.your-account
 TEMPORAL_API_KEY=your-api-key
 ```
 
-Fill in `firmware/.env.wifi`:
+Process environment variables override these values. Set `TEMPORAL_ENV_FILE`
+to use a file in another location; an explicit path must exist. Temporal Cloud
+uses server-authenticated TLS, and the API key replaces a client certificate,
+not TLS itself.
 
-```dotenv
-BADGE_WIFI_SSID=your-2.4-ghz-network
-BADGE_WIFI_PASS=your-password
-```
+Configuration files containing Temporal or Wi-Fi credentials are ignored by
+Git. Never commit populated dotenv files, private keys, or generated firmware
+configuration.
 
-The controller also accepts the three `TEMPORAL_*` values as process
-environment variables; those override `.env.temporal`. Firmware configuration
-is compiled into the image, so rebuild and reflash after changing credentials
-or Wi-Fi. Never commit either populated file.
+## Common checks
 
-Set `TEMPORAL_ENV_FILE` or `BADGE_WIFI_ENV_FILE` to use config files in another
-location. An explicit path must exist; the build fails immediately if it is
-mistyped. The generated firmware config stays under the ignored `target/`
-directory, and build output does not print credential values.
-
-Temporal Cloud always uses server-authenticated TLS. The API key replaces a
-client certificate; it does not disable TLS.
-
-## Build and flash a badge
-
-Build the release firmware from the repository root:
+Run formatting and whitespace checks from the repository root:
 
 ```sh
-./build-firmware.sh
-```
-
-The first build downloads and compiles ESP-IDF dependencies and can take
-several minutes. The output ELF is:
-
-```text
-target/xtensa-esp32s3-espidf/release/temporal-trivia-badge-firmware
-```
-
-Connect one badge, find its serial port, and flash it:
-
-```sh
-ls /dev/cu.usbmodem* /dev/ttyACM* 2>/dev/null
-./flash-badge.sh /dev/cu.usbmodem101
-```
-
-On Linux, substitute the discovered `/dev/ttyACM...` path. The flash script
-selects ESP32-S3, 16 MiB flash, the repository partition table, and the factory
-application partition; those options are required for this firmware. It opens
-a serial monitor after flashing. Exit the monitor with `Ctrl+C`; the badge
-continues running.
-
-If the Xtensa compiler is installed outside the normal espup/ESP-IDF location,
-set `ESP_GCC_DIR` to the directory containing
-`xtensa-esp32s3-elf-gcc`. Set `ESPFLASH` to an executable path to override the
-flashing tool.
-
-## Run the controller and scoreboard
-
-Start the controller under the included restart supervisor:
-
-```sh
-./run-web.sh
-```
-
-Open <http://127.0.0.1:3000> and mirror that browser window to the TV. The
-script detects the host Rust target, marks the process as supervised, and
-restarts it after the operator deliberately crashes the Mac Worker. Temporal
-history restores the active round after restart. During recovery, the
-scoreboard keeps the race visible and shows Worker stopped, supervisor restart,
-Temporal reconnect, and History restored states before returning to the game.
-
-Click **START ROUND** after badges show as connected. Only one round can run at
-a time. Badges that begin polling during a round join automatically.
-
-Open the operator drawer with the small **TP7** test pad in the bottom-right
-corner or the `O` keyboard shortcut. It can send durable Workflow Signals for
-10 seconds of double points, 10 seconds of Rust-only scheduling, sudden death,
-or one 30-second extension. Completed rounds are stored in Workflow Memo and
-listed through Temporal Visibility; no database or namespace changes are
-required.
-
-Optional typed Search Attributes can be registered by an API key with
-namespace-operator permission:
-
-```sh
-./configure-visibility.sh
-TRIVIA_SEARCH_ATTRIBUTES=1 ./run-web.sh
-```
-
-The game and round history still work when those attributes are not registered.
-
-## Badge controls
-
-- Press the directional button matching the on-screen answer position.
-- Hold LEFT+RIGHT for 500 ms to simulate a Worker failure. The badge stops
-  heartbeating for six seconds; Temporal's five-second heartbeat timeout makes
-  the unfinished question available to another Worker.
-- A wrong answer applies the score penalty and fails the Activity retryably, so
-  the question returns to the Task Queue.
-- While waiting for work, hold DOWN for three seconds to sleep. Release DOWN
-  after `SLEEPING`, then press any face button to wake. Sleep is disabled while
-  an Activity owns the controls.
-
-## Verification
-
-Run the host-side Workflow and question-pool tests:
-
-```sh
-host_target=$(rustc -vV | awk '/^host:/ { print $2 }')
-cargo test --offline -p temporal-trivia-shared -p temporal-trivia-web --target "$host_target"
-cargo clippy --offline -p temporal-trivia-shared -p temporal-trivia-web \
-  --target "$host_target" --all-targets -- -D warnings
 cargo fmt --all -- --check
 git diff --check
 ```
 
-The most recent physical validation used one ESP32-S3 badge. Build, flash,
-boot, Wi-Fi, Temporal Cloud polling, answers, sleep/wake, and supervised Mac
-Worker recovery were exercised. A timeout visibly moving between two physical
-badges remains the outstanding multi-device validation.
+Component-specific build, test, and hardware verification commands live in the
+[firmware guide](firmware/README.md) and [web guide](web/README.md).
+
+The most recent physical validation covered build, flash, boot, Wi-Fi,
+Temporal Cloud polling, answers, sleep/wake, and supervised Mac Worker
+recovery on one Replay 2026 badge. A timeout visibly moving between two
+physical badges remains the outstanding multi-device validation.

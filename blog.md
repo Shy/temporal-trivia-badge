@@ -321,3 +321,17 @@
   browser. The restart stage rendered clearly at the mirrored 16:9 layout, the
   Rust process restarted, and the frozen winner returned unchanged after
   Temporal replay.
+
+## 2026-08-17 — Component-owned setup guides
+
+- Split the deployment documentation by component. `firmware/README.md` now
+  owns ESP Rust installation, embedded configuration, release builds, serial
+  discovery, flashing, controls, and physical verification. It explicitly
+  targets the Temporal Replay 2026 Badge rather than a generic ESP32-S3 board.
+- `web/README.md` now owns Temporal controller configuration, supervised server
+  startup, scoreboard operation, Workflow Signal controls, optional Search
+  Attributes, and host tests.
+- Reduced the root README to shared architecture, requirements, Temporal Cloud
+  configuration, repository navigation, credential hygiene, and common checks.
+  It links directly into both component guides so a web-only user is no longer
+  led through firmware flashing first.
