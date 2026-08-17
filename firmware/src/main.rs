@@ -48,14 +48,10 @@ use crate::{
     session::SessionStore,
 };
 
-const WIFI_SSID: &str = env!("BADGE_WIFI_SSID");
-const WIFI_PASS: &str = env!("BADGE_WIFI_PASS");
-const TEMPORAL_ADDRESS: &str = env!("TEMPORAL_ADDRESS");
-const TEMPORAL_NAMESPACE: &str = env!("TEMPORAL_NAMESPACE");
-const TEMPORAL_API_KEY: &str = env!("TEMPORAL_API_KEY");
-const BUILD_UNIX_EPOCH: &str = env!("BADGE_BUILD_UNIX_EPOCH");
+include!(concat!(env!("OUT_DIR"), "/firmware_config.rs"));
 const PANIC_HOLD: Duration = Duration::from_millis(500);
 const HEARTBEAT_BLACKOUT: Duration = Duration::from_secs(6);
+const MAX_ACTIVITY_RUNTIME: Duration = Duration::from_secs(120);
 
 type SharedDisplay = Arc<Mutex<BadgeDisplay>>;
 type SharedInput = Arc<Mutex<BadgeInput>>;
@@ -97,8 +93,13 @@ struct BadgeActivities {
     input: SharedInput,
     identity: BadgeIdentity,
     session: Arc<SessionStore>,
-    watched_game: Mutex<Option<String>>,
+    result_watcher: Mutex<Option<ResultWatcher>>,
     activity_active: Arc<AtomicBool>,
+}
+
+struct ResultWatcher {
+    game_id: String,
+    task: tokio::task::JoinHandle<()>,
 }
 
 struct ActivityActiveGuard(Arc<AtomicBool>);
@@ -124,6 +125,7 @@ enum Choice {
 #[activities]
 impl BadgeActivities {
     #[activity(name = "trivia.answer_question")]
+    #[allow(dead_code)]
     async fn answer_question(
         self: Arc<Self>,
         ctx: ActivityContext,
@@ -161,7 +163,7 @@ impl BadgeActivities {
         }
 
         show_question(&self.display, &self.identity.callsign, &task)?;
-        let activity_deadline_unix_ms = task.max_deadline_unix_ms.max(task.deadline_unix_ms);
+        let activity_deadline_unix_ms = task.latest_possible_deadline_unix_ms();
         match self
             .wait_for_choice(&ctx, activity_deadline_unix_ms)
             .await?
@@ -243,8 +245,15 @@ impl BadgeActivities {
         ctx: &ActivityContext,
         deadline_unix_ms: u64,
     ) -> Result<Choice, ActivityError> {
+        // Temporal cancellation and the Workflow deadline remain authoritative.
+        // This monotonic ceiling prevents a stale build-time clock fallback from
+        // leaving the physical badge stuck in an Activity indefinitely.
+        let local_deadline = Instant::now() + MAX_ACTIVITY_RUNTIME;
         while self.sample_buttons()?.any() {
-            if ctx.is_cancelled() || unix_ms() >= deadline_unix_ms {
+            if ctx.is_cancelled()
+                || unix_ms() >= deadline_unix_ms
+                || Instant::now() >= local_deadline
+            {
                 return Err(ActivityError::cancelled());
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -255,7 +264,10 @@ impl BadgeActivities {
         let mut combo_started: Option<Instant> = None;
         let mut last_heartbeat = Instant::now();
         loop {
-            if ctx.is_cancelled() || unix_ms() >= deadline_unix_ms {
+            if ctx.is_cancelled()
+                || unix_ms() >= deadline_unix_ms
+                || Instant::now() >= local_deadline
+            {
                 return Err(ActivityError::cancelled());
             }
             if last_heartbeat.elapsed() >= Duration::from_secs(1) {
@@ -309,21 +321,26 @@ impl BadgeActivities {
         ctx: &ActivityContext,
         task: &QuestionTask,
     ) -> Result<(), ActivityError> {
-        let mut watched = self
-            .watched_game
-            .lock()
-            .map_err(|_| anyhow!("watcher lock poisoned"))?;
-        if watched.as_deref() == Some(&task.game_id) {
-            return Ok(());
-        }
-        *watched = Some(task.game_id.clone());
         let Some(handle) = ctx.workflow_handle::<GameWorkflow>() else {
             return Ok(());
         };
+        let mut watcher = self
+            .result_watcher
+            .lock()
+            .map_err(|_| anyhow!("watcher lock poisoned"))?;
+        if let Some(current) = watcher.as_ref() {
+            if current.game_id == task.game_id && !current.task.is_finished() {
+                return Ok(());
+            }
+        }
+        if let Some(previous) = watcher.take() {
+            previous.task.abort();
+        }
         let display = Arc::clone(&self.display);
         let identity = self.identity.clone();
         let deadline_unix_ms = task.deadline_unix_ms;
-        tokio::spawn(async move {
+        let game_id = task.game_id.clone();
+        let task = tokio::spawn(async move {
             let wait_ms = deadline_unix_ms.saturating_sub(unix_ms());
             tokio::time::sleep(Duration::from_millis(wait_ms)).await;
             for _ in 0..45 {
@@ -350,6 +367,7 @@ impl BadgeActivities {
                 let _ = screen.show_status(&identity.callsign, "RESULT PENDING");
             }
         });
+        *watcher = Some(ResultWatcher { game_id, task });
         Ok(())
     }
 }
@@ -444,7 +462,7 @@ async fn run_worker(
             input: Arc::clone(&input),
             identity: identity.clone(),
             session,
-            watched_game: Mutex::new(None),
+            result_watcher: Mutex::new(None),
             activity_active: Arc::clone(&activity_active),
         })
         .build();
@@ -568,6 +586,8 @@ fn sync_clock() -> Result<(EspSntp<'static>, bool)> {
         tv_sec: build_epoch,
         tv_usec: 0,
     };
+    // SAFETY: `timestamp` is a valid timeval for the duration of the call and
+    // the timezone pointer is null, as required when no timezone is supplied.
     let result = unsafe { esp_idf_svc::sys::settimeofday(&timestamp, std::ptr::null()) };
     if result != 0 {
         bail!("SNTP timed out and settimeofday failed with code {result}");

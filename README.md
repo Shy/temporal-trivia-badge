@@ -7,6 +7,8 @@ questions, retries unfinished work, and preserves the round through crashes.
 
 - `firmware/` contains the Rust/ESP-IDF badge Worker, OLED UI, buttons,
   deterministic badge identity, and NVS session state.
+- `shared/` contains the serialized game contract used by both Workers, so the
+  firmware and controller cannot drift independently.
 - `web/` contains the Rust Workflow Worker, operator server, scoreboard, and
   bundled trivia deck.
 
@@ -64,6 +66,11 @@ The controller also accepts the three `TEMPORAL_*` values as process
 environment variables; those override `.env.temporal`. Firmware configuration
 is compiled into the image, so rebuild and reflash after changing credentials
 or Wi-Fi. Never commit either populated file.
+
+Set `TEMPORAL_ENV_FILE` or `BADGE_WIFI_ENV_FILE` to use config files in another
+location. An explicit path must exist; the build fails immediately if it is
+mistyped. The generated firmware config stays under the ignored `target/`
+directory, and build output does not print credential values.
 
 Temporal Cloud always uses server-authenticated TLS. The API key replaces a
 client certificate; it does not disable TLS.
@@ -150,7 +157,9 @@ Run the host-side Workflow and question-pool tests:
 
 ```sh
 host_target=$(rustc -vV | awk '/^host:/ { print $2 }')
-cargo test --offline -p temporal-trivia-web --target "$host_target"
+cargo test --offline -p temporal-trivia-shared -p temporal-trivia-web --target "$host_target"
+cargo clippy --offline -p temporal-trivia-shared -p temporal-trivia-web \
+  --target "$host_target" --all-targets -- -D warnings
 cargo fmt --all -- --check
 git diff --check
 ```

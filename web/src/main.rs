@@ -46,6 +46,11 @@ use crate::{
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const ACTIVE_WORKFLOW_ID: &str = "temporal-trivia-active";
 const SUPERVISOR_RESTART_EXIT: i32 = 75;
+const WORKFLOW_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const WORKFLOW_MAX_ERROR_BACKOFF: Duration = Duration::from_secs(4);
+const MAX_BACKLOG_OVERRIDE: usize = 100;
+const ROUND_HISTORY_LIMIT: usize = 12;
+const ROUND_HISTORY_SCAN_LIMIT: usize = 100;
 
 #[derive(Clone)]
 struct AppState {
@@ -146,7 +151,10 @@ async fn event_stream(
     let stream = receiver.filter_map(|message| async move {
         match message {
             Ok(json) => Some(Ok(Event::default().data(json))),
-            Err(_) => None,
+            Err(error) => {
+                eprintln!("SSE subscriber lagged and skipped updates: {error}");
+                None
+            }
         }
     });
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
@@ -156,10 +164,13 @@ async fn start_game(
     State(state): State<AppState>,
     Json(request): Json<StartRequest>,
 ) -> Result<Json<GameSnapshot>, ApiError> {
-    if request.backlog_override == Some(0) {
+    if request
+        .backlog_override
+        .is_some_and(|value| !(1..=MAX_BACKLOG_OVERRIDE).contains(&value))
+    {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
-            "backlog override must be positive".to_owned(),
+            format!("backlog override must be between 1 and {MAX_BACKLOG_OVERRIDE}"),
         ));
     }
     let deck = questions::build_deck(rand::random(), 500)
@@ -274,7 +285,9 @@ async fn crash_worker() -> Result<Json<serde_json::Value>, ApiError> {
 async fn round_history(State(state): State<AppState>) -> Result<Json<Vec<RoundSummary>>, ApiError> {
     let stream = state.client.list_workflows(
         "WorkflowId = 'temporal-trivia-active' AND ExecutionStatus = 'Completed'",
-        WorkflowListOptions::builder().limit(12).build(),
+        WorkflowListOptions::builder()
+            .limit(ROUND_HISTORY_SCAN_LIMIT)
+            .build(),
     );
     tokio::pin!(stream);
     let mut rounds = Vec::new();
@@ -285,6 +298,8 @@ async fn round_history(State(state): State<AppState>) -> Result<Json<Vec<RoundSu
             rounds.push(summary);
         }
     }
+    rounds.sort_by_key(|round| std::cmp::Reverse(round.closed_unix_ms.unwrap_or_default()));
+    rounds.truncate(ROUND_HISTORY_LIMIT);
     Ok(Json(rounds))
 }
 
@@ -363,13 +378,23 @@ async fn observe_workflow(
             }
             Err(error) => {
                 consecutive_errors = consecutive_errors.saturating_add(1);
-                if consecutive_errors == 20 {
+                if consecutive_errors == 1 || consecutive_errors.is_multiple_of(20) {
                     eprintln!("Workflow query failed repeatedly: {error}");
                 }
             }
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(observer_delay(consecutive_errors)).await;
     }
+}
+
+fn observer_delay(consecutive_errors: u8) -> Duration {
+    if consecutive_errors == 0 {
+        return WORKFLOW_POLL_INTERVAL;
+    }
+    let exponent = u32::from(consecutive_errors.saturating_sub(1).min(4));
+    WORKFLOW_POLL_INTERVAL
+        .saturating_mul(2_u32.pow(exponent))
+        .min(WORKFLOW_MAX_ERROR_BACKOFF)
 }
 
 async fn publish(state: &AppState, snapshot: GameSnapshot) {
@@ -407,11 +432,10 @@ fn read_cloud_settings() -> Result<HashMap<String, String>> {
         .parent()
         .and_then(Path::parent)
         .map(|root| root.join("TrafficLight/.env"));
-    let path = if local_path.is_file() {
-        local_path
-    } else {
-        legacy_path.unwrap_or(local_path)
-    };
+    let path = std::env::var_os("TEMPORAL_ENV_FILE")
+        .map(PathBuf::from)
+        .or_else(|| local_path.is_file().then_some(local_path.clone()))
+        .unwrap_or_else(|| legacy_path.unwrap_or(local_path));
     let mut settings = if path.is_file() {
         parse_env_file(&path)?
     } else {
@@ -430,23 +454,8 @@ fn read_cloud_settings() -> Result<HashMap<String, String>> {
 fn parse_env_file(path: &Path) -> Result<HashMap<String, String>> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("read Temporal settings from {}", path.display()))?;
-    Ok(content
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                return None;
-            }
-            let (key, value) = line.split_once('=')?;
-            Some((
-                key.trim().to_owned(),
-                value
-                    .trim()
-                    .trim_matches(|character| character == '\'' || character == '"')
-                    .to_owned(),
-            ))
-        })
-        .collect())
+    temporal_trivia_shared::parse_env(&content)
+        .with_context(|| format!("parse Temporal settings from {}", path.display()))
 }
 
 fn required<'a>(settings: &'a HashMap<String, String>, name: &str) -> Result<&'a str> {
@@ -455,4 +464,17 @@ fn required<'a>(settings: &'a HashMap<String, String>, name: &str) -> Result<&'a
         bail!("missing {name}; set it in the environment or .env.temporal");
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn observer_backoff_is_bounded() {
+        assert_eq!(observer_delay(0), Duration::from_millis(250));
+        assert_eq!(observer_delay(1), Duration::from_millis(250));
+        assert_eq!(observer_delay(2), Duration::from_millis(500));
+        assert_eq!(observer_delay(20), Duration::from_secs(4));
+    }
 }

@@ -118,6 +118,9 @@ fn check(code: sys::esp_err_t, operation: &str) -> Result<()> {
 }
 
 fn enter_deep_sleep() -> Result<()> {
+    // SAFETY: every GPIO in `BUTTON_WAKE_GPIOS` is RTC-capable on the ESP32-S3
+    // used by this fixed badge revision. Calls are sequenced according to the
+    // ESP-IDF deep-sleep API, and `check` validates every fallible return code.
     unsafe {
         check(
             sys::esp_sleep_disable_wakeup_source(sys::esp_sleep_source_t_ESP_SLEEP_WAKEUP_ALL),

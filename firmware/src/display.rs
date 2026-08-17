@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use esp_idf_svc::hal::{
     delay::BLOCK,
     gpio::{Gpio4, Gpio5},
@@ -22,7 +22,7 @@ impl BadgeDisplay {
     pub fn new(i2c: I2C0<'static>, sda: Gpio4<'static>, scl: Gpio5<'static>) -> Result<Self> {
         let config = I2cConfig::new().baudrate(KiloHertz(400).into());
         let mut display = Self {
-            i2c: I2cDriver::new(i2c, sda, scl, &config)?,
+            i2c: I2cDriver::new(i2c, sda, scl, &config).context("initialize OLED I2C")?,
             buffer: [0; BUFFER_LEN],
         };
         display.command(&[
@@ -119,7 +119,7 @@ impl BadgeDisplay {
             .values()
             .filter(|player| player.score > own_score)
             .count();
-        let won = snapshot.winners.iter().any(|winner| winner == callsign);
+        let won = own.is_some_and(|player| snapshot.winners.contains(&player.callsign));
         self.buffer.fill(0);
         self.draw_text(0, 0, callsign);
         self.draw_hline(0, 127, 9);
@@ -137,10 +137,15 @@ impl BadgeDisplay {
     }
 
     fn command(&mut self, commands: &[u8]) -> Result<()> {
-        let mut packet = Vec::with_capacity(commands.len() + 1);
-        packet.push(0x00);
-        packet.extend_from_slice(commands);
-        self.i2c.write(ADDRESS, &packet, BLOCK)?;
+        let packet_len = commands.len() + 1;
+        if packet_len > 32 {
+            bail!("OLED command is too long: {} bytes", commands.len());
+        }
+        let mut packet = [0_u8; 32];
+        packet[1..packet_len].copy_from_slice(commands);
+        self.i2c
+            .write(ADDRESS, &packet[..packet_len], BLOCK)
+            .context("write OLED command")?;
         Ok(())
     }
 
@@ -150,7 +155,9 @@ impl BadgeDisplay {
             let mut packet = [0_u8; 17];
             packet[0] = 0x40;
             packet[1..].copy_from_slice(chunk);
-            self.i2c.write(ADDRESS, &packet, BLOCK)?;
+            self.i2c
+                .write(ADDRESS, &packet, BLOCK)
+                .context("write OLED framebuffer chunk")?;
         }
         Ok(())
     }

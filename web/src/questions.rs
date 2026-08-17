@@ -28,6 +28,7 @@ pub fn build_deck(seed: u64, maximum: usize) -> Result<Vec<Question>> {
     let mut temporal = temporal_questions();
     let mut math = math_questions();
     let mut general = general_questions()?;
+    validate_questions(rust.iter().chain(&temporal).chain(&math).chain(&general))?;
     for bucket in [&mut rust, &mut temporal, &mut math, &mut general] {
         bucket.shuffle(&mut rng);
     }
@@ -64,21 +65,33 @@ pub fn build_deck(seed: u64, maximum: usize) -> Result<Vec<Question>> {
         deck.push(general[cursors[3]].clone());
         cursors[3] += 1;
     }
-    for question in &mut deck {
-        shuffle_answers(question, &mut rng);
+    if deck.len() != maximum {
+        bail!(
+            "requested {maximum} questions, but only {} unique questions are available",
+            deck.len()
+        );
     }
-    validate_deck(&deck)?;
+    for question in &mut deck {
+        shuffle_answers(question, &mut rng)?;
+    }
+    validate_questions(&deck)?;
     Ok(deck)
 }
 
-fn shuffle_answers(question: &mut Question, rng: &mut StdRng) {
-    let correct = question.answers[question.correct_index as usize].clone();
+fn shuffle_answers(question: &mut Question, rng: &mut StdRng) -> Result<()> {
+    let correct = question
+        .answers
+        .get(question.correct_index as usize)
+        .cloned()
+        .with_context(|| format!("invalid correct answer index for {}", question.id))?;
     question.answers.shuffle(rng);
     question.correct_index = question
         .answers
         .iter()
         .position(|answer| answer == &correct)
-        .expect("correct answer remains in answer array") as u8;
+        .with_context(|| format!("correct answer disappeared while shuffling {}", question.id))?
+        as u8;
+    Ok(())
 }
 
 fn general_questions() -> Result<Vec<Question>> {
@@ -177,10 +190,10 @@ fn fits(prompt: &str, answers: &[String; 4]) -> bool {
             == 4
 }
 
-fn validate_deck(deck: &[Question]) -> Result<()> {
+fn validate_questions<'a>(questions: impl IntoIterator<Item = &'a Question>) -> Result<()> {
     let mut ids = HashSet::new();
     let mut prompts = HashSet::new();
-    for question in deck {
+    for question in questions {
         if !fits(&question.prompt, &question.answers) {
             bail!("question does not fit badge: {}", question.id);
         }
@@ -626,5 +639,11 @@ mod tests {
     #[test]
     fn source_filter_has_large_fallback_pool() {
         assert!(general_questions().unwrap().len() > 300);
+    }
+
+    #[test]
+    fn oversized_deck_request_fails_instead_of_returning_partial_work() {
+        let error = build_deck(7, 10_000).unwrap_err();
+        assert!(error.to_string().contains("unique questions are available"));
     }
 }

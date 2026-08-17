@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use esp_idf_svc::nvs::{EspDefaultNvs, EspDefaultNvsPartition, EspNvs};
 use serde::{Deserialize, Serialize};
 
@@ -37,13 +37,21 @@ impl SessionStore {
             .lock()
             .map_err(|_| anyhow!("session lock poisoned"))?;
         let is_new = stored.session.game_id != game_id;
-        if is_new {
-            stored.session = PersistedSession {
-                game_id: game_id.to_owned(),
-                deadline_unix_ms,
-                abandoned_questions: Vec::new(),
+        if is_new || stored.session.deadline_unix_ms < deadline_unix_ms {
+            let next = if is_new {
+                PersistedSession {
+                    game_id: game_id.to_owned(),
+                    deadline_unix_ms,
+                    abandoned_questions: Vec::new(),
+                }
+            } else {
+                PersistedSession {
+                    deadline_unix_ms,
+                    ..stored.session.clone()
+                }
             };
-            save(&stored)?;
+            save(&stored.nvs, &next)?;
+            stored.session = next;
         }
         Ok(is_new)
     }
@@ -73,11 +81,10 @@ impl SessionStore {
                 .iter()
                 .any(|id| id == question_id)
         {
-            stored
-                .session
-                .abandoned_questions
-                .push(question_id.to_owned());
-            save(&stored)?;
+            let mut next = stored.session.clone();
+            next.abandoned_questions.push(question_id.to_owned());
+            save(&stored.nvs, &next)?;
+            stored.session = next;
         }
         Ok(())
     }
@@ -91,11 +98,17 @@ fn load(nvs: &EspDefaultNvs) -> Result<PersistedSession> {
     let Some(bytes) = nvs.get_blob(SESSION_KEY, &mut buffer)? else {
         return Ok(PersistedSession::default());
     };
-    serde_json::from_slice(bytes).context("decode persisted trivia session")
+    match serde_json::from_slice(bytes) {
+        Ok(session) => Ok(session),
+        Err(error) => {
+            log::warn!("discarding corrupt persisted trivia session: {error}");
+            Ok(PersistedSession::default())
+        }
+    }
 }
 
-fn save(stored: &StoredSession) -> Result<()> {
-    let bytes = serde_json::to_vec(&stored.session)?;
-    stored.nvs.set_blob(SESSION_KEY, &bytes)?;
+fn save(nvs: &EspDefaultNvs, session: &PersistedSession) -> Result<()> {
+    let bytes = serde_json::to_vec(session)?;
+    nvs.set_blob(SESSION_KEY, &bytes)?;
     Ok(())
 }

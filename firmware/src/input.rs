@@ -19,6 +19,8 @@ pub struct BadgeInput {
     up: PinDriver<'static, Input>,
     right: PinDriver<'static, Input>,
     down: PinDriver<'static, Input>,
+    // GPIO0 is fixed by the badge PCB. Holding LEFT while resetting can select
+    // the ESP ROM bootloader, so release it before power-up or reset.
     left: PinDriver<'static, Input>,
 }
 

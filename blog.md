@@ -230,3 +230,53 @@
   appeared in the committed filename history. Hardened `.gitignore` with
   generic dotenv, private-key, certificate-bundle, and credentials-file rules
   while explicitly retaining sanitized `.example` templates.
+
+## 2026-08-17 — Code-quality and durability review
+
+- Ran OpenCodeReview 1.9.5 against 20 first-party files using GPT-5.4 through
+  a process-only API key. The first attempt exposed an OCR provider-mode bug:
+  `OCR_USE_ANTHROPIC=false` is treated as truthy; `0` selects OpenAI, while the
+  native `--provider openai` path is the reliable configuration. Vendored SDK
+  code and the large upstream trivia JSON were deliberately excluded.
+- Removed the duplicated firmware/web game model and introduced the small
+  `temporal-trivia-shared` crate. It owns the serialized contract, rejects
+  out-of-range answer indices while deserializing, preserves the intentional
+  pre-extension deadline default, and sorts tied winner callsigns explicitly.
+- Replaced plaintext `cargo:rustc-env` credential directives with an ignored
+  generated Rust config under `target/`. Firmware and controller now share a
+  tested dotenv parser; explicit config-file overrides fail on missing paths.
+  Credentials remain embedded in the flash image by design but no longer
+  appear in verbose Cargo directives.
+- Made NVS state updates transactional: the cached session changes only after
+  flash persistence succeeds. Corrupt state now degrades to an empty session
+  and is overwritten when the next game begins. A same-game deadline can move
+  forward without clearing the badge's abandoned-question set.
+- Badge result watchers now have owned task handles. A new game aborts the old
+  watcher, and a completed watcher can be replaced, preventing stale rounds
+  from overwriting the OLED. The local monotonic ceiling is 120 seconds, safely
+  beyond Temporal's 95-second Activity timeout while still bounding a stale
+  build-time clock fallback.
+- Question generation now validates the full authored catalog before use,
+  rejects undersized deck results, and removes panic-based shuffling. The web
+  observer polls at 250 ms during healthy rounds and backs off to four seconds
+  during repeated query failures; SSE lag is visible in logs. Round history
+  scans 100 Memo-bearing executions, sorts locally by close time, and returns
+  the newest 12 because this Cloud namespace previously rejected server-side
+  `ORDER BY`.
+- Review follow-up fixed all four medium findings from the first diff pass.
+  A focused scan of the five files skipped by the token budget produced two
+  high and six medium suggestions; local history sorting was accepted, while
+  fixed-array, one-time startup I/O, intentional no-duplicate prompt filtering,
+  serialized NVS access, and extension-deadline semantics were verified as
+  context-dependent false positives or accepted embedded tradeoffs.
+- Final host gates: strict Clippy passes with `-D warnings`; 11 tests pass
+  across shared and web crates; formatting, shell syntax, and diff whitespace
+  checks pass. The ESP32-S3 release firmware rebuilt twice in 2m13s and 2m12s;
+  the final build completed without warnings. Physical behavior was not
+  reflashed in this review because the firmware changes are structural and the
+  target release build is the relevant gate; prior live badge validation still
+  stands.
+- After the focused follow-up renamed the extension deadline helper, the final
+  ESP32-S3 release build passed again in 2m10s with no warnings. The supervised
+  controller restarted as PID 40373, restored the frozen Cloud result, and its
+  history endpoint returned the four Memo-bearing rounds newest-first.

@@ -8,6 +8,8 @@ pub struct BadgeIdentity {
 
 pub fn factory_identity() -> Result<BadgeIdentity> {
     let mut mac = [0_u8; 6];
+    // SAFETY: `mac` provides six writable bytes, which is the buffer contract
+    // of `esp_efuse_mac_get_default`; the pointer is not retained after return.
     let result = unsafe { esp_idf_svc::sys::esp_efuse_mac_get_default(mac.as_mut_ptr()) };
     if result != 0 {
         bail!("read factory MAC failed with code {result}");
