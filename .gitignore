@@ -4,6 +4,14 @@
 /.embuild
 firmware/.env.wifi
 .env.temporal
+.env
+.env.*
+!.env*.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
 firmware/sdkconfig
 firmware/sdkconfig.old
 /.sdkconfig.partition.defaults

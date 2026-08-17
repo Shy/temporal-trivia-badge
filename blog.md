@@ -218,3 +218,15 @@
 - Switched Git operations to SSH. A direct GitHub SSH probe authenticated as
   `Shy`, so pushes no longer depend on HTTPS credential handling while GitHub
   API operations continue using the OAuth token stored in Keychain.
+
+## 2026-08-17 — Public repository secret audit
+
+- Before and after publishing, scanned the current tree and complete local Git
+  history for Temporal API keys, Wi-Fi passwords, GitHub tokens, AWS-style
+  keys, and private-key headers. No real credential material or private-key
+  files were found; matches were limited to documented placeholder values and
+  variable names.
+- Confirmed `.env.temporal` and `firmware/.env.wifi` are ignored and have never
+  appeared in the committed filename history. Hardened `.gitignore` with
+  generic dotenv, private-key, certificate-bundle, and credentials-file rules
+  while explicitly retaining sanitized `.example` templates.
