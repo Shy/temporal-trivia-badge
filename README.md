@@ -119,7 +119,9 @@ Start the controller under the included restart supervisor:
 Open <http://127.0.0.1:3000> and mirror that browser window to the TV. The
 script detects the host Rust target, marks the process as supervised, and
 restarts it after the operator deliberately crashes the Mac Worker. Temporal
-history restores the active round after restart.
+history restores the active round after restart. During recovery, the
+scoreboard keeps the race visible and shows Worker stopped, supervisor restart,
+Temporal reconnect, and History restored states before returning to the game.
 
 Click **START ROUND** after badges show as connected. Only one round can run at
 a time. Badges that begin polling during a round join automatically.

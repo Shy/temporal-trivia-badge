@@ -520,10 +520,17 @@
     .offline-card {
       position: relative;
       width: 56cqw;
-      padding: 7cqh 5cqw;
+      padding: 5.5cqh 5cqw 5cqh;
       border-top: .12cqw solid var(--fault);
       border-bottom: .12cqw solid var(--fault);
       text-align: center;
+    }
+    .offline.recovered .offline-card {
+      border-color: var(--gold);
+    }
+    .offline.recovered .offline-card::before,
+    .offline.recovered .offline-card::after {
+      border-color: var(--gold);
     }
     .offline-card::before, .offline-card::after {
       content: "";
@@ -545,7 +552,46 @@
       letter-spacing: .08em;
       text-transform: uppercase;
     }
-    .offline span {
+    .offline.recovered strong { color: var(--gold); }
+    .recovery-steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1.2cqw;
+      margin-top: 3.4cqh;
+    }
+    .recovery-step {
+      position: relative;
+      padding-top: 1.6cqh;
+      border-top: .08cqw solid rgba(242, 237, 161, .18);
+      color: rgba(242, 237, 161, .36);
+      font-family: "Space Mono", monospace;
+      font-size: 1.05cqh;
+      letter-spacing: .08em;
+      line-height: 1.35;
+      text-transform: uppercase;
+    }
+    .recovery-step::before {
+      content: "";
+      position: absolute;
+      top: -.34cqw;
+      left: 50%;
+      width: .55cqw;
+      aspect-ratio: 1;
+      border: .08cqw solid currentColor;
+      border-radius: 50%;
+      background: var(--substrate);
+      transform: translateX(-50%);
+    }
+    .recovery-step.done,
+    .recovery-step.active {
+      border-color: var(--gold);
+      color: var(--gold);
+    }
+    .recovery-step.done::before { background: var(--gold); }
+    .recovery-step.active::before {
+      box-shadow: 0 0 0 .22cqw rgba(203, 180, 132, .13);
+    }
+    .recovery-detail {
       display: block;
       margin-top: 2.2cqh;
       color: var(--silk);
@@ -633,8 +679,14 @@
 
     <div class="offline" id="offline" role="status" aria-live="assertive">
       <div class="offline-card">
-        <strong>Mac Worker offline</strong>
-        <span>Temporal is holding the game<br>Replaying durable history</span>
+        <strong id="recoveryTitle">Mac Worker stopped</strong>
+        <div class="recovery-steps" aria-label="Worker recovery progress">
+          <span class="recovery-step active">Worker<br>stopped</span>
+          <span class="recovery-step">Supervisor<br>restart</span>
+          <span class="recovery-step">Temporal<br>reconnect</span>
+          <span class="recovery-step">History<br>restored</span>
+        </div>
+        <span class="recovery-detail" id="recoveryDetail">Temporal is holding the game state</span>
       </div>
     </div>
     <div class="toast" id="toast" role="alert"></div>
@@ -647,6 +699,8 @@
     let previousScores = new Map();
     let eventSource;
     let toastTimer;
+    let recoveryActive = false;
+    let recoveryTimers = [];
 
     const el = id => document.getElementById(id);
 
@@ -801,8 +855,46 @@
       timer.classList.toggle('urgent', state.status === 'running' && seconds <= 10);
     }
 
-    function setOffline(isOffline) {
-      el('offline').classList.toggle('visible', isOffline);
+    function setRecoveryStage(stage, disconnected = false) {
+      const overlay = el('offline');
+      const titles = disconnected
+        ? ['Connection lost', 'Supervisor restarting', 'Connecting to Temporal', 'Worker recovered']
+        : ['Mac Worker crashed', 'Supervisor restarting', 'Connecting to Temporal', 'Worker recovered'];
+      const details = [
+        'Temporal is holding the game state',
+        'Starting a new Rust Worker process',
+        'Waiting for the Worker to reconnect',
+        'Workflow History replayed // race state restored'
+      ];
+      el('recoveryTitle').textContent = titles[stage];
+      el('recoveryDetail').textContent = details[stage];
+      overlay.classList.toggle('recovered', stage === 3);
+      overlay.querySelectorAll('.recovery-step').forEach((step, index) => {
+        step.classList.toggle('done', index < stage);
+        step.classList.toggle('active', index === stage);
+      });
+    }
+
+    function beginRecovery(disconnected = false) {
+      if (recoveryActive) return;
+      recoveryActive = true;
+      recoveryTimers.forEach(clearTimeout);
+      recoveryTimers = [];
+      el('offline').classList.add('visible');
+      setRecoveryStage(0, disconnected);
+      recoveryTimers.push(setTimeout(() => setRecoveryStage(1, disconnected), 500));
+      recoveryTimers.push(setTimeout(() => setRecoveryStage(2, disconnected), 1800));
+    }
+
+    function completeRecovery() {
+      if (!recoveryActive) return;
+      recoveryTimers.forEach(clearTimeout);
+      recoveryTimers = [];
+      setRecoveryStage(3);
+      recoveryTimers.push(setTimeout(() => {
+        el('offline').classList.remove('visible', 'recovered');
+        recoveryActive = false;
+      }, 2500));
     }
 
     function showError(message) {
@@ -822,15 +914,17 @@
     function connectEvents() {
       eventSource?.close();
       eventSource = new EventSource('/api/events');
-      eventSource.onopen = () => {
-        setOffline(false);
-        refreshState().catch(error => {
-          setOffline(true);
+      eventSource.onopen = async () => {
+        try {
+          await refreshState();
+          completeRecovery();
+        } catch (error) {
+          beginRecovery(true);
           showError(error.message);
-        });
+        }
       };
       eventSource.onmessage = event => render(JSON.parse(event.data));
-      eventSource.onerror = () => setOffline(true);
+      eventSource.onerror = () => beginRecovery(true);
     }
 
     function openDrawer() {
@@ -915,7 +1009,7 @@
         const response = await fetch('/api/crash-worker', {method: 'POST'});
         if (!response.ok) throw new Error(await response.text());
         closeDrawer();
-        setOffline(true);
+        beginRecovery(false);
       } catch (error) {
         showError(error.message);
       }
@@ -949,11 +1043,11 @@
 
     refreshState()
       .then(() => {
-        setOffline(false);
+        el('offline').classList.remove('visible');
         connectEvents();
       })
       .catch(() => {
-        setOffline(true);
+        beginRecovery(true);
         connectEvents();
       });
     tick();

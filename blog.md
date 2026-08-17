@@ -306,3 +306,18 @@
   controller process exited, `run-web.sh` restarted it with a new PID, and the
   state endpoint recovered the same active Workflow with its player, score,
   latest answer, double-points window, and used 30-second extension intact.
+
+## 2026-08-17 — Visible Mac Worker recovery
+
+- Replaced the single generic offline message with a four-stage recovery view:
+  Worker stopped, supervisor restart, Temporal reconnect, and History restored.
+  The scoreboard remains dimly visible behind it so the audience can see that
+  the race state is frozen rather than reset.
+- The browser begins the sequence as soon as the crash endpoint acknowledges
+  the command. EventSource reconnection and a successful state refresh are the
+  gate for the final recovered state; it remains visible for 2.5 seconds before
+  returning to the race.
+- Verified the sequence against the real supervised controller in the in-app
+  browser. The restart stage rendered clearly at the mirrored 16:9 layout, the
+  Rust process restarted, and the frozen winner returned unchanged after
+  Temporal replay.
