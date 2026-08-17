@@ -1,0 +1,43 @@
+# Engineering journal
+
+## 2026-08-17 — First playable Temporal trivia build
+
+- Created a standalone Git repository with two product folders: `firmware/`
+  for the ESP32-S3 Rust Worker and `web/` for the Rust Workflow Worker,
+  controller API, SSE feed, TV UI, and committed question data.
+- Kept the Activity Worker boundary already proven on this badge. The firmware
+  uses the locally patched Temporal Rust SDK 0.5.0 needed for ESP-IDF, connects
+  to Temporal Cloud with API-key authentication and verified server TLS, and
+  derives a stable callsign from the factory MAC.
+- Implemented the OLED question UI with word wrapping and the original badge's
+  positional Nintendo-style glyphs. Implemented TOP, RIGHT, LEFT, and DOWN
+  answer input plus a 500 ms LEFT+RIGHT simulated crash, three-second recovery,
+  retryable Activity failure, and NVS-backed question refusal.
+- Limited each physical Worker to one concurrent Activity. The SDK tuner
+  otherwise defaults to enough Activity slots for multiple questions to race
+  over the badge's single display and button cluster.
+- Implemented the durable 60-second Workflow, dynamic
+  `max(10, active_badges * 2)` backlog, scoring, tied winners, latest-answer
+  spotlight, and single-game controller guard. The HTTP start path reserves the
+  game before its Cloud call so simultaneous clicks cannot start two games.
+- Committed an Open Trivia DB snapshot from
+  `leakyhose/open-trivia-script-data`, attributed under CC BY-SA 4.0, and mixed
+  it with authored Rust, Temporal, and generated math questions. Tests enforce
+  the first 100 as 30 Rust, 15 Temporal, 15 math, and 40 general questions,
+  reject display overflow, and reject duplicates.
+- Host tests passed: 5 tests, 0 failures. The Rust web controller connected to
+  the configured Temporal Cloud namespace and served both `/api/state` and the
+  TV page at `127.0.0.1:3000`. Browser inspection found no page overflow at a
+  1280x720 viewport.
+- The first live controller connection failed with `Connecting to HTTPS without
+  TLS enabled`. The endpoint was HTTPS, but the Mac client omitted
+  `TlsOptions`; adding default server TLS fixed the connection. API-key auth
+  does not remove Temporal Cloud's TLS requirement.
+- The firmware release build passed in 2m05s. An initial `espflash save-image`
+  check incorrectly reported the 8 MB image against a 4 MB app partition
+  because the command omitted the custom table. Passing `firmware/partitions.csv`
+  confirmed 8,000,128 / 14,680,064 bytes (54.50%). `flash-badge.sh` now always
+  passes the explicit 16 MB badge layout.
+- Live flashing is still pending. macOS currently exposes only Bluetooth,
+  debug-console, and earbud serial ports; no Espressif `/dev/cu.usbmodem*`
+  device is present. No flash attempt was made against an unresolved target.

@@ -1,0 +1,17 @@
+[build]
+target = "xtensa-esp32s3-espidf"
+
+[target.'cfg(target_os = "espidf")']
+linker = "ldproxy"
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32s3"
+ESP_IDF_VERSION = "v5.4"
+ESP_IDF_SYS_ROOT_CRATE = "temporal-trivia-badge-firmware"
+CC_xtensa_esp32s3_espidf = "xtensa-esp32s3-elf-gcc"
+AR_xtensa_esp32s3_espidf = "xtensa-esp32s3-elf-ar"
+CFLAGS_xtensa_esp32s3_espidf = "-mlongcalls"

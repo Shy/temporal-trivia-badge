@@ -1,0 +1,9 @@
+/target/
+/.cargo-home/
+/.tools/
+/.embuild
+firmware/.env.wifi
+firmware/sdkconfig
+firmware/sdkconfig.old
+/.sdkconfig.partition.defaults
+.DS_Store
