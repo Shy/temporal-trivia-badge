@@ -33,6 +33,13 @@
   TLS enabled`. The endpoint was HTTPS, but the Mac client omitted
   `TlsOptions`; adding default server TLS fixed the connection. API-key auth
   does not remove Temporal Cloud's TLS requirement.
+- The first real smoke Workflow then failed every Workflow task with
+  `[TMPRL1100] Nondeterministic future detected` because the implementation
+  uses `FuturesUnordered` to maintain the dynamic Activity backlog. SDK Core's
+  own `wait_condition_waker_in_futures_unordered` test documents that its
+  forwarding wakers fall outside the detector guard and disables the detector
+  for that case. Applied the same narrow Worker-level opt-out; every future in
+  this Workflow remains an SDK Activity or SDK timer.
 - The firmware release build passed in 2m05s. An initial `espflash save-image`
   check incorrectly reported the 8 MB image against a 4 MB app partition
   because the command omitted the custom table. Passing `firmware/partitions.csv`
@@ -41,3 +48,13 @@
 - Live flashing is still pending. macOS currently exposes only Bluetooth,
   debug-console, and earbud serial ports; no Espressif `/dev/cu.usbmodem*`
   device is present. No flash attempt was made against an unresolved target.
+- After disabling the detector for this documented combinator case, the
+  previously stuck smoke Workflow replayed and completed. A fresh fixed-ID
+  Cloud round scheduled 10 unique Activities, populated the 60-second global
+  deadline, rejected a concurrent start with HTTP 409, and completed with
+  `Round finished with no answers` at the deadline.
+- Replaced UUID Workflow IDs with stable ID `temporal-trivia-active`, explicit
+  `AllowDuplicate` reuse after completion, and `Fail` conflict behavior while
+  running. Restarting the Rust controller restored the finished snapshot from
+  a Temporal query, proving the TV state no longer depends only on process
+  memory. The controller was left running at `127.0.0.1:3000`.

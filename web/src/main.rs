@@ -22,8 +22,11 @@ use axum::{
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use temporalio_client::{
-    Client, ClientOptions, Connection, ConnectionOptions, TlsOptions, WorkflowQueryOptions,
-    WorkflowStartOptions,
+    Client, ClientOptions, Connection, ConnectionOptions, TlsOptions, WorkflowHandle,
+    WorkflowQueryOptions, WorkflowStartOptions,
+};
+use temporalio_common::protos::temporal::api::enums::v1::{
+    WorkflowIdConflictPolicy, WorkflowIdReusePolicy,
 };
 use temporalio_common::{telemetry::TelemetryOptions, worker::WorkerTaskTypes};
 use temporalio_sdk::{Worker, WorkerOptions};
@@ -34,10 +37,11 @@ use uuid::Uuid;
 
 use crate::{
     model::{GAME_SECONDS, GameInput, GameSnapshot, GameStatus, WEB_TASK_QUEUE},
-    workflow::GameWorkflow,
+    workflow::{GameWorkflow, GameWorkflowRun},
 };
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
+const ACTIVE_WORKFLOW_ID: &str = "temporal-trivia-active";
 
 #[derive(Clone)]
 struct AppState {
@@ -73,6 +77,10 @@ async fn main() -> Result<()> {
     let worker_options = WorkerOptions::new(WEB_TASK_QUEUE)
         .register_workflow::<GameWorkflow>()?
         .task_types(WorkerTaskTypes::workflow_only())
+        // The SDK's detector treats FuturesUnordered's forwarding wakers as
+        // external even when every contained future is an SDK Activity/timer.
+        // Core's own FuturesUnordered test uses this same opt-out.
+        .detect_nondeterministic_futures(false)
         .build();
     let mut worker = Worker::new(&runtime, client.clone(), worker_options)
         .map_err(|error| anyhow!(error.to_string()))?;
@@ -84,6 +92,7 @@ async fn main() -> Result<()> {
         active_workflow: Arc::new(Mutex::new(None)),
         events,
     };
+    resume_active_game(state.clone());
     let app = Router::new()
         .route("/", get(index))
         .route("/api/state", get(current_state))
@@ -160,7 +169,10 @@ async fn start_game(
         .start_workflow(
             GameWorkflow::run,
             input,
-            WorkflowStartOptions::new(WEB_TASK_QUEUE, game_id.clone()).build(),
+            WorkflowStartOptions::new(WEB_TASK_QUEUE, ACTIVE_WORKFLOW_ID)
+                .id_reuse_policy(WorkflowIdReusePolicy::AllowDuplicate)
+                .id_conflict_policy(WorkflowIdConflictPolicy::Fail)
+                .build(),
         )
         .await;
     let handle = match handle_result {
@@ -180,40 +192,70 @@ async fn start_game(
         ..Default::default()
     };
     publish(&state, starting.clone()).await;
-    let observer_state = state.clone();
+    tokio::spawn(observe_workflow(state.clone(), handle, game_id));
+    Ok(Json(starting))
+}
+
+fn resume_active_game(state: AppState) {
     tokio::spawn(async move {
-        let mut consecutive_errors = 0_u8;
-        loop {
-            if observer_state.active_workflow.lock().await.as_deref() != Some(&game_id) {
-                return;
-            }
-            match handle
-                .query(GameWorkflow::snapshot, (), WorkflowQueryOptions::default())
-                .await
-            {
-                Ok(snapshot) => {
-                    consecutive_errors = 0;
-                    let finished = snapshot.status == GameStatus::Finished;
-                    publish(&observer_state, snapshot).await;
-                    if finished {
-                        let mut active = observer_state.active_workflow.lock().await;
-                        if active.as_deref() == Some(&game_id) {
-                            *active = None;
-                        }
-                        return;
-                    }
-                }
-                Err(error) => {
-                    consecutive_errors = consecutive_errors.saturating_add(1);
-                    if consecutive_errors == 20 {
-                        eprintln!("Workflow query failed repeatedly: {error}");
-                    }
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        let handle = state
+            .client
+            .get_workflow_handle::<GameWorkflowRun>(ACTIVE_WORKFLOW_ID);
+        let Ok(snapshot) = handle
+            .query(GameWorkflow::snapshot, (), WorkflowQueryOptions::default())
+            .await
+        else {
+            return;
+        };
+        let Some(game_id) = snapshot.game_id.clone() else {
+            return;
+        };
+        let running = snapshot.status == GameStatus::Running;
+        if running {
+            *state.active_workflow.lock().await = Some(game_id.clone());
+        }
+        publish(&state, snapshot).await;
+        if running {
+            observe_workflow(state, handle, game_id).await;
         }
     });
-    Ok(Json(starting))
+}
+
+async fn observe_workflow(
+    state: AppState,
+    handle: WorkflowHandle<Client, GameWorkflowRun>,
+    game_id: String,
+) {
+    let mut consecutive_errors = 0_u8;
+    loop {
+        if state.active_workflow.lock().await.as_deref() != Some(&game_id) {
+            return;
+        }
+        match handle
+            .query(GameWorkflow::snapshot, (), WorkflowQueryOptions::default())
+            .await
+        {
+            Ok(snapshot) => {
+                consecutive_errors = 0;
+                let finished = snapshot.status == GameStatus::Finished;
+                publish(&state, snapshot).await;
+                if finished {
+                    let mut active = state.active_workflow.lock().await;
+                    if active.as_deref() == Some(&game_id) {
+                        *active = None;
+                    }
+                    return;
+                }
+            }
+            Err(error) => {
+                consecutive_errors = consecutive_errors.saturating_add(1);
+                if consecutive_errors == 20 {
+                    eprintln!("Workflow query failed repeatedly: {error}");
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn publish(state: &AppState, snapshot: GameSnapshot) {

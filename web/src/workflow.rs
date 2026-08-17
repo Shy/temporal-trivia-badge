@@ -28,6 +28,8 @@ pub struct GameWorkflow {
     snapshot: GameSnapshot,
 }
 
+pub type GameWorkflowRun = <GameWorkflow as temporalio_common::HasWorkflowDefinition>::Run;
+
 #[workflow_methods]
 impl GameWorkflow {
     #[run]
