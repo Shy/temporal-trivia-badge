@@ -33,33 +33,50 @@ impl BadgeDisplay {
     }
 
     pub fn show_status(&mut self, title: &str, detail: &str) -> Result<()> {
-        self.buffer.fill(0);
-        self.draw_text(0, 0, title);
-        for x in 0..WIDTH {
-            self.set_pixel(x, 9);
-        }
-
-        let mut x = 0;
-        let mut y = 16;
-        for character in detail.chars() {
-            if character == '\n' || x + 6 > WIDTH {
-                x = 0;
-                y += 8;
-                if character == '\n' {
-                    continue;
-                }
-            }
-            if y + 7 > HEIGHT {
-                break;
-            }
-            self.draw_char(x, y, character);
-            x += 6;
-        }
-        self.flush()
+        let (headline, subline) = detail.split_once('\n').unwrap_or((detail, ""));
+        let active_panel = match headline {
+            "BOOTING" => Some(0),
+            "CONNECTING WIFI" | "SYNCING TIME" => Some(1),
+            "CONNECTING CLOUD" => Some(2),
+            _ => Some(3),
+        };
+        self.show_panel_layout(
+            title,
+            headline,
+            subline,
+            ["BADGE", "WIFI", "CLOUD", "WORKER"],
+            active_panel,
+        )
     }
 
     pub fn show_waiting(&mut self, callsign: &str) -> Result<()> {
-        self.show_status(callsign, "WORKER MODE\nWAITING FOR GAME")
+        self.show_panel_layout(
+            callsign,
+            "WORKER MODE",
+            "WAITING FOR GAME",
+            ["POLLING", "CLOUD", "L+R CRASH", "DOWN SLEEP"],
+            Some(3),
+        )
+    }
+
+    pub fn show_sleep_countdown(&mut self, callsign: &str, seconds: u64) -> Result<()> {
+        self.show_panel_layout(
+            callsign,
+            &format!("SLEEP IN {seconds}"),
+            "RELEASE TO CANCEL",
+            ["HOLD", "DOWN", "RELEASE", "CANCEL"],
+            Some(3),
+        )
+    }
+
+    pub fn show_sleeping(&mut self, callsign: &str) -> Result<()> {
+        self.show_panel_layout(
+            callsign,
+            "SLEEPING",
+            "RELEASE BUTTON",
+            ["POWER", "OFF", "ANY KEY", "WAKE"],
+            Some(3),
+        )
     }
 
     pub fn power_off(&mut self) -> Result<()> {
@@ -77,33 +94,48 @@ impl BadgeDisplay {
         // Same physical layout as the original badge's button cluster:
         // top/right on row one, left/down on row two.
         for (index, &(x, y)) in [(0, 30), (65, 30), (0, 48), (65, 48)].iter().enumerate() {
-            self.draw_frame(x, y, 63, 16);
-            self.draw_button_glyph(index, x + 2, y + 3);
-            self.draw_compact_wrapped(x + 14, y + 3, &question.answers[index], 11, 2);
+            self.draw_panel(index, x, y, &question.answers[index], false);
         }
         self.flush()
     }
 
     pub fn show_feedback(&mut self, callsign: &str, correct: bool, score_delta: i32) -> Result<()> {
-        self.buffer.fill(0);
-        self.draw_text(0, 0, callsign);
-        self.draw_hline(0, 127, 9);
-        self.draw_text(31, 22, if correct { "CORRECT" } else { "WRONG" });
-        self.draw_text(49, 38, if score_delta > 0 { "+1" } else { "-1" });
-        self.flush()
+        self.show_panel_layout(
+            callsign,
+            if correct { "CORRECT" } else { "WRONG" },
+            if correct {
+                "ANSWER ACCEPTED"
+            } else {
+                "TEMPORAL RETRY"
+            },
+            [
+                "ANSWER",
+                if correct { "ACCEPTED" } else { "FAILED" },
+                "SCORE",
+                if score_delta > 0 { "+1" } else { "-1" },
+            ],
+            None,
+        )
     }
 
     pub fn show_panic(&mut self, callsign: &str) -> Result<()> {
-        self.buffer.fill(0);
-        self.draw_text(0, 0, callsign);
-        self.draw_frame(5, 15, 118, 36);
-        self.draw_text(39, 23, "PANIC!");
-        self.draw_compact_wrapped(23, 37, "WORKER CRASH SIMULATED", 22, 2);
-        self.flush()
+        self.show_panel_layout(
+            callsign,
+            "WORKER CRASH",
+            "TEMPORAL HOLDS TASK",
+            ["HEARTBEAT", "STOPPED", "TASK", "RETRYING"],
+            Some(2),
+        )
     }
 
     pub fn show_recovered(&mut self, callsign: &str) -> Result<()> {
-        self.show_status(callsign, "WORKER RECOVERED\nQUESTION RETURNED")
+        self.show_panel_layout(
+            callsign,
+            "WORKER BACK",
+            "QUESTION RETURNED",
+            ["ONLINE", "CLOUD", "TASK", "READY"],
+            Some(3),
+        )
     }
 
     pub fn show_results(
@@ -120,19 +152,37 @@ impl BadgeDisplay {
             .filter(|player| player.score > own_score)
             .count();
         let won = own.is_some_and(|player| snapshot.winners.contains(&player.callsign));
+        let correct = own.map(|player| player.correct).unwrap_or(0);
+        let wrong = own.map(|player| player.wrong).unwrap_or(0);
+        let score_label = format!("SCORE {own_score}");
+        let place_label = format!("PLACE {place}");
+        let correct_label = format!("RIGHT {correct}");
+        let wrong_label = format!("WRONG {wrong}");
+        self.show_panel_layout(
+            callsign,
+            if won { "YOU WON" } else { "ROUND OVER" },
+            &format!("WINNER {}", snapshot.winners.join(" + ")),
+            [&score_label, &place_label, &correct_label, &wrong_label],
+            if won { Some(0) } else { None },
+        )
+    }
+
+    fn show_panel_layout(
+        &mut self,
+        callsign: &str,
+        headline: &str,
+        detail: &str,
+        labels: [&str; 4],
+        active_panel: Option<usize>,
+    ) -> Result<()> {
         self.buffer.fill(0);
         self.draw_text(0, 0, callsign);
-        self.draw_hline(0, 127, 9);
-        self.draw_text(0, 15, if won { "YOU WON" } else { "ROUND OVER" });
-        self.draw_text(0, 27, &format!("SCORE {own_score}"));
-        self.draw_text(0, 38, &format!("PLACE {place}"));
-        self.draw_compact_wrapped(
-            0,
-            51,
-            &format!("WINNER {}", snapshot.winners.join(" + ")),
-            31,
-            2,
-        );
+        self.draw_hline(0, 127, 8);
+        self.draw_centered_text(11, headline);
+        self.draw_centered_compact(22, detail);
+        for (index, &(x, y)) in [(0, 30), (65, 30), (0, 48), (65, 48)].iter().enumerate() {
+            self.draw_panel(index, x, y, labels[index], active_panel == Some(index));
+        }
         self.flush()
     }
 
@@ -170,6 +220,18 @@ impl BadgeDisplay {
             self.draw_char(x, y, character);
             x += 6;
         }
+    }
+
+    fn draw_centered_text(&mut self, y: usize, text: &str) {
+        let visible: String = text.chars().take(21).collect();
+        let width = visible.chars().count().saturating_mul(6).saturating_sub(1);
+        self.draw_text((WIDTH.saturating_sub(width)) / 2, y, &visible);
+    }
+
+    fn draw_centered_compact(&mut self, y: usize, text: &str) {
+        let visible: String = text.chars().take(31).collect();
+        let width = visible.chars().count().saturating_mul(4).saturating_sub(1);
+        self.draw_compact_text((WIDTH.saturating_sub(width)) / 2, y, &visible);
     }
 
     fn draw_compact_wrapped(
@@ -237,6 +299,15 @@ impl BadgeDisplay {
         ] {
             self.set_pixel(x + dx, y + dy);
         }
+    }
+
+    fn draw_panel(&mut self, index: usize, x: usize, y: usize, label: &str, active: bool) {
+        self.draw_frame(x, y, 63, 16);
+        if active {
+            self.draw_hline(x + 3, x + 59, y + 1);
+        }
+        self.draw_button_glyph(index, x + 2, y + 3);
+        self.draw_compact_wrapped(x + 14, y + 3, label, 11, 2);
     }
 
     fn draw_button_glyph(&mut self, answer_index: usize, x: usize, y: usize) {
@@ -357,6 +428,7 @@ fn glyph(character: char) -> [u8; 5] {
         '.' => [0x00, 0x60, 0x60, 0x00, 0x00],
         ':' => [0x00, 0x36, 0x36, 0x00, 0x00],
         '/' => [0x20, 0x10, 0x08, 0x04, 0x02],
+        '+' => [0x08, 0x08, 0x3e, 0x08, 0x08],
         ' ' => [0; 5],
         _ => [0x02, 0x01, 0x51, 0x09, 0x06],
     }

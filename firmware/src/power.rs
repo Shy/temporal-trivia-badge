@@ -74,7 +74,7 @@ pub async fn monitor(
                 let mut screen = display
                     .lock()
                     .map_err(|_| anyhow::anyhow!("display lock poisoned"))?;
-                screen.show_status(&callsign, "SLEEPING\nRELEASE BUTTON")?;
+                screen.show_sleeping(&callsign)?;
             }
             while input
                 .lock()
@@ -99,10 +99,7 @@ pub async fn monitor(
                 display
                     .lock()
                     .map_err(|_| anyhow::anyhow!("display lock poisoned"))?
-                    .show_status(
-                        &callsign,
-                        &format!("SLEEP IN {remaining_seconds}\nRELEASE TO CANCEL"),
-                    )?;
+                    .show_sleep_countdown(&callsign, remaining_seconds)?;
             }
         }
 

@@ -335,3 +335,23 @@
   configuration, repository navigation, credential hygiene, and common checks.
   It links directly into both component guides so a web-only user is no longer
   led through firmware flashing first.
+
+## 2026-08-17 — Unified four-button badge UI
+
+- Replaced the plain-text waiting, connection, feedback, simulated-crash,
+  recovery, sleep, and result screens with the same callsign header, central
+  message area, and four framed directional cells used by questions.
+- Waiting now exposes polling, Cloud, `L+R` crash, and `DOWN` sleep context.
+  Result cells show score, place, correct answers, and wrong answers without
+  changing the established directional icon language. Connection screens use
+  the four cells as badge, Wi-Fi, Cloud, and Worker stages with a double-line
+  marker on the active stage.
+- Added dedicated four-cell sleep countdown and sleeping screens, factored the
+  repeated panel drawing into one renderer, and added the missing `+` glyph so
+  positive score feedback no longer renders as an unknown character.
+- The ESP32-S3 release build passed in 2m16s with no warnings. Flashed the
+  8,043,744-byte image to the connected Replay 2026 badge; 16 MiB flash and
+  8 MiB PSRAM initialized, Wi-Fi reconnected, and the Worker resumed polling
+  `temporal-trivia-badges-v1`. Serial validation cannot judge the subjective
+  OLED spacing, so the physical waiting screen remains the visual approval
+  gate.
