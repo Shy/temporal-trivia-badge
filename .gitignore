@@ -3,6 +3,7 @@
 /.tools/
 /.embuild
 firmware/.env.wifi
+.env.temporal
 firmware/sdkconfig
 firmware/sdkconfig.old
 /.sdkconfig.partition.defaults

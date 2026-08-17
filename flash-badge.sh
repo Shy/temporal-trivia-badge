@@ -2,12 +2,18 @@
 set -eu
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-espflash="$project_dir/.tools/bin/espflash"
 firmware_elf="$project_dir/target/xtensa-esp32s3-espidf/release/temporal-trivia-badge-firmware"
 partition_table="$project_dir/firmware/partitions.csv"
 
-if [ ! -x "$espflash" ]; then
-    echo "missing espflash: $espflash" >&2
+if [ -n "${ESPFLASH:-}" ]; then
+    espflash=$ESPFLASH
+elif [ -x "$project_dir/.tools/bin/espflash" ]; then
+    espflash="$project_dir/.tools/bin/espflash"
+else
+    espflash=$(command -v espflash || true)
+fi
+if [ -z "$espflash" ] || [ ! -x "$espflash" ]; then
+    echo "missing espflash; install it with: cargo install espflash" >&2
     exit 1
 fi
 

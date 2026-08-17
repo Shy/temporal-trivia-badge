@@ -8,22 +8,23 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path as AxumPath, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response, Sse, sse::Event},
     routing::{get, post},
 };
 use futures::{Stream, StreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use temporalio_client::{
-    Client, ClientOptions, Connection, ConnectionOptions, TlsOptions, WorkflowHandle,
-    WorkflowQueryOptions, WorkflowStartOptions,
+    Client, ClientOptions, Connection, ConnectionOptions, TlsOptions, WorkflowExecution,
+    WorkflowHandle, WorkflowListOptions, WorkflowQueryOptions, WorkflowSignalOptions,
+    WorkflowStartOptions,
 };
 use temporalio_common::protos::temporal::api::enums::v1::{
     WorkflowIdConflictPolicy, WorkflowIdReusePolicy,
@@ -36,12 +37,15 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::{
-    model::{GAME_SECONDS, GameInput, GameSnapshot, GameStatus, WEB_TASK_QUEUE},
+    model::{
+        ChaosCommand, GAME_SECONDS, GameInput, GameSnapshot, GameStatus, RoundMemo, WEB_TASK_QUEUE,
+    },
     workflow::{GameWorkflow, GameWorkflowRun},
 };
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const ACTIVE_WORKFLOW_ID: &str = "temporal-trivia-active";
+const SUPERVISOR_RESTART_EXIT: i32 = 75;
 
 #[derive(Clone)]
 struct AppState {
@@ -54,6 +58,19 @@ struct AppState {
 #[derive(Default, Deserialize)]
 struct StartRequest {
     backlog_override: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct RoundSummary {
+    game_id: String,
+    run_id: String,
+    closed_unix_ms: Option<u64>,
+    winners: Vec<String>,
+    badge_count: i64,
+    correct_answers: i64,
+    wrong_answers: i64,
+    crashes: i64,
+    reassignments: i64,
 }
 
 #[derive(Debug)]
@@ -98,6 +115,9 @@ async fn main() -> Result<()> {
         .route("/api/state", get(current_state))
         .route("/api/events", get(event_stream))
         .route("/api/start", post(start_game))
+        .route("/api/chaos/{command}", post(apply_chaos))
+        .route("/api/history", get(round_history))
+        .route("/api/crash-worker", post(crash_worker))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
     println!("Temporal Trivia controller: http://127.0.0.1:3000");
@@ -163,6 +183,7 @@ async fn start_game(
         questions: deck,
         duration_seconds: GAME_SECONDS,
         backlog_override: request.backlog_override,
+        index_search_attributes: std::env::var("TRIVIA_SEARCH_ATTRIBUTES").as_deref() == Ok("1"),
     };
     let handle_result = state
         .client
@@ -194,6 +215,99 @@ async fn start_game(
     publish(&state, starting.clone()).await;
     tokio::spawn(observe_workflow(state.clone(), handle, game_id));
     Ok(Json(starting))
+}
+
+async fn apply_chaos(
+    State(state): State<AppState>,
+    AxumPath(command): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let command = match command.as_str() {
+        "double-points" => ChaosCommand::DoublePoints,
+        "rust-only" => ChaosCommand::RustOnly,
+        "sudden-death" => ChaosCommand::SuddenDeath,
+        "extend" => ChaosCommand::ExtendThirtySeconds,
+        _ => {
+            return Err(ApiError(
+                StatusCode::NOT_FOUND,
+                format!("unknown chaos command: {command}"),
+            ));
+        }
+    };
+    if state.active_workflow.lock().await.is_none() {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "no game is running".to_owned(),
+        ));
+    }
+    let handle = state
+        .client
+        .get_workflow_handle::<GameWorkflowRun>(ACTIVE_WORKFLOW_ID);
+    handle
+        .signal(
+            GameWorkflow::apply_chaos,
+            command,
+            WorkflowSignalOptions::default(),
+        )
+        .await
+        .map_err(|error| ApiError(StatusCode::BAD_GATEWAY, error.to_string()))?;
+    Ok(Json(serde_json::json!({ "accepted": true })))
+}
+
+async fn crash_worker() -> Result<Json<serde_json::Value>, ApiError> {
+    if std::env::var("TRIVIA_SUPERVISED").as_deref() != Ok("1") {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "controller was not started with ./run-web.sh; refusing an unrecoverable exit"
+                .to_owned(),
+        ));
+    }
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        std::process::exit(SUPERVISOR_RESTART_EXIT);
+    });
+    Ok(Json(serde_json::json!({
+        "accepted": true,
+        "message": "Temporal is holding the game while the Mac Worker restarts"
+    })))
+}
+
+async fn round_history(State(state): State<AppState>) -> Result<Json<Vec<RoundSummary>>, ApiError> {
+    let stream = state.client.list_workflows(
+        "WorkflowId = 'temporal-trivia-active' AND ExecutionStatus = 'Completed'",
+        WorkflowListOptions::builder().limit(12).build(),
+    );
+    tokio::pin!(stream);
+    let mut rounds = Vec::new();
+    while let Some(execution) = stream.next().await {
+        let execution =
+            execution.map_err(|error| ApiError(StatusCode::BAD_GATEWAY, error.to_string()))?;
+        if let Some(summary) = round_summary(&execution) {
+            rounds.push(summary);
+        }
+    }
+    Ok(Json(rounds))
+}
+
+fn round_summary(execution: &WorkflowExecution) -> Option<RoundSummary> {
+    let payload = execution.memo()?.fields.get("TriviaRoundSummary")?;
+    let memo: RoundMemo = serde_json::from_slice(&payload.data).ok()?;
+    Some(RoundSummary {
+        game_id: memo.game_id,
+        run_id: execution.run_id().to_owned(),
+        closed_unix_ms: execution.close_time().map(system_time_unix_ms),
+        winners: memo.winners,
+        badge_count: memo.badge_count,
+        correct_answers: memo.correct_answers,
+        wrong_answers: memo.wrong_answers,
+        crashes: memo.crashes,
+        reassignments: memo.reassignments,
+    })
+}
+
+fn system_time_unix_ms(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn resume_active_game(state: AppState) {
@@ -287,13 +401,34 @@ async fn connect_cloud() -> Result<Client> {
 
 fn read_cloud_settings() -> Result<HashMap<String, String>> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let temporal_root = manifest
+    let project = manifest.parent().context("locate repository root")?;
+    let local_path = project.join(".env.temporal");
+    let legacy_path = project
         .parent()
         .and_then(Path::parent)
-        .and_then(Path::parent)
-        .context("locate Temporal workspace")?;
-    let path = temporal_root.join("TrafficLight/.env");
-    let content = std::fs::read_to_string(&path)
+        .map(|root| root.join("TrafficLight/.env"));
+    let path = if local_path.is_file() {
+        local_path
+    } else {
+        legacy_path.unwrap_or(local_path)
+    };
+    let mut settings = if path.is_file() {
+        parse_env_file(&path)?
+    } else {
+        HashMap::new()
+    };
+    for key in ["TEMPORAL_ADDRESS", "TEMPORAL_NAMESPACE", "TEMPORAL_API_KEY"] {
+        if let Ok(value) = std::env::var(key)
+            && !value.is_empty()
+        {
+            settings.insert(key.to_owned(), value);
+        }
+    }
+    Ok(settings)
+}
+
+fn parse_env_file(path: &Path) -> Result<HashMap<String, String>> {
+    let content = std::fs::read_to_string(path)
         .with_context(|| format!("read Temporal settings from {}", path.display()))?;
     Ok(content
         .lines()
@@ -317,7 +452,7 @@ fn read_cloud_settings() -> Result<HashMap<String, String>> {
 fn required<'a>(settings: &'a HashMap<String, String>, name: &str) -> Result<&'a str> {
     let value = settings.get(name).map(String::as_str).unwrap_or("");
     if value.is_empty() {
-        bail!("missing {name} in TrafficLight/.env");
+        bail!("missing {name}; set it in the environment or .env.temporal");
     }
     Ok(value)
 }

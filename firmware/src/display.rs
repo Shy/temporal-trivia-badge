@@ -62,6 +62,12 @@ impl BadgeDisplay {
         self.show_status(callsign, "WORKER MODE\nWAITING FOR GAME")
     }
 
+    pub fn power_off(&mut self) -> Result<()> {
+        self.buffer.fill(0);
+        self.flush()?;
+        self.command(&[0xae])
+    }
+
     pub fn show_question(&mut self, callsign: &str, question: &Question) -> Result<()> {
         self.buffer.fill(0);
         self.draw_text(0, 0, callsign);

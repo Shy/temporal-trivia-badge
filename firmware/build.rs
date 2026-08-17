@@ -18,10 +18,17 @@ fn read_env(path: &Path) -> HashMap<String, String> {
 
 fn export(required: &[&str], values: &HashMap<String, String>) {
     for key in required {
-        println!(
-            "cargo:rustc-env={key}={}",
-            values.get(*key).map(String::as_str).unwrap_or("")
+        println!("cargo:rerun-if-env-changed={key}");
+        let value = std::env::var(key)
+            .ok()
+            .filter(|value| !value.is_empty())
+            .or_else(|| values.get(*key).cloned())
+            .unwrap_or_default();
+        assert!(
+            !value.is_empty(),
+            "missing {key}; set it in the environment or the documented .env file"
         );
+        println!("cargo:rustc-env={key}={}", value);
     }
 }
 
@@ -34,13 +41,20 @@ fn main() {
     );
 
     let firmware = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let temporal_root = firmware
+    let project = firmware
+        .parent()
+        .expect("firmware is inside the repository");
+    let wifi_path = firmware.join(".env.wifi");
+    let local_temporal_path = project.join(".env.temporal");
+    let legacy_temporal_path = project
         .parent()
         .and_then(Path::parent)
-        .and_then(Path::parent)
-        .expect("repository is under the Temporal workspace");
-    let wifi_path = firmware.join(".env.wifi");
-    let temporal_path = temporal_root.join("TrafficLight/.env");
+        .map(|root| root.join("TrafficLight/.env"));
+    let temporal_path = if local_temporal_path.is_file() {
+        local_temporal_path
+    } else {
+        legacy_temporal_path.unwrap_or(local_temporal_path)
+    };
 
     println!("cargo:rerun-if-changed={}", wifi_path.display());
     println!("cargo:rerun-if-changed={}", temporal_path.display());

@@ -2,12 +2,16 @@ mod display;
 mod identity;
 mod input;
 mod model;
+mod power;
 mod session;
 
 use std::{
     convert::TryInto,
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -51,7 +55,7 @@ const TEMPORAL_NAMESPACE: &str = env!("TEMPORAL_NAMESPACE");
 const TEMPORAL_API_KEY: &str = env!("TEMPORAL_API_KEY");
 const BUILD_UNIX_EPOCH: &str = env!("BADGE_BUILD_UNIX_EPOCH");
 const PANIC_HOLD: Duration = Duration::from_millis(500);
-const RECOVERY_COOLDOWN: Duration = Duration::from_secs(3);
+const HEARTBEAT_BLACKOUT: Duration = Duration::from_secs(6);
 
 type SharedDisplay = Arc<Mutex<BadgeDisplay>>;
 type SharedInput = Arc<Mutex<BadgeInput>>;
@@ -79,6 +83,9 @@ impl GameWorkflow {
     #[signal]
     fn recovered(&mut self, _ctx: &mut SyncWorkflowContext<Self>, _event: BadgeEvent) {}
 
+    #[signal]
+    fn wrong_answer(&mut self, _ctx: &mut SyncWorkflowContext<Self>, _answer: BadgeAnswer) {}
+
     #[query]
     fn snapshot(&self, _ctx: &WorkflowContextView) -> GameSnapshot {
         GameSnapshot::default()
@@ -91,6 +98,22 @@ struct BadgeActivities {
     identity: BadgeIdentity,
     session: Arc<SessionStore>,
     watched_game: Mutex<Option<String>>,
+    activity_active: Arc<AtomicBool>,
+}
+
+struct ActivityActiveGuard(Arc<AtomicBool>);
+
+impl ActivityActiveGuard {
+    fn new(active: Arc<AtomicBool>) -> Self {
+        active.store(true, Ordering::Release);
+        Self(active)
+    }
+}
+
+impl Drop for ActivityActiveGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 enum Choice {
@@ -106,6 +129,7 @@ impl BadgeActivities {
         ctx: ActivityContext,
         task: QuestionTask,
     ) -> Result<BadgeAnswer, ActivityError> {
+        let _active = ActivityActiveGuard::new(Arc::clone(&self.activity_active));
         self.session
             .begin_game(&task.game_id, task.deadline_unix_ms)?;
         self.start_result_watcher(&ctx, &task)?;
@@ -137,18 +161,40 @@ impl BadgeActivities {
         }
 
         show_question(&self.display, &self.identity.callsign, &task)?;
-        match self.wait_for_choice(&ctx, task.deadline_unix_ms).await? {
+        let activity_deadline_unix_ms = task.max_deadline_unix_ms.max(task.deadline_unix_ms);
+        match self
+            .wait_for_choice(&ctx, activity_deadline_unix_ms)
+            .await?
+        {
             Choice::Answer(selected_index) => {
                 let correct = selected_index == task.question.correct_index;
                 show_feedback(&self.display, &self.identity.callsign, correct)?;
                 tokio::time::sleep(Duration::from_millis(350)).await;
                 show_waiting(&self.display, &self.identity.callsign)?;
-                Ok(BadgeAnswer {
+                let answer = BadgeAnswer {
                     badge_id: self.identity.id.clone(),
                     callsign: self.identity.callsign.clone(),
-                    question_id: task.question.id,
+                    question_id: task.question.id.clone(),
                     selected_index,
-                })
+                };
+                if correct {
+                    Ok(answer)
+                } else {
+                    self.session.abandon(&task.game_id, &task.question.id)?;
+                    if let Some(handle) = ctx.workflow_handle::<GameWorkflow>() {
+                        if let Err(error) = handle
+                            .signal(
+                                GameWorkflow::wrong_answer,
+                                answer,
+                                WorkflowSignalOptions::default(),
+                            )
+                            .await
+                        {
+                            log::warn!("could not signal wrong answer: {error}");
+                        }
+                    }
+                    Err(anyhow!("incorrect answer; retry question on another badge").into())
+                }
             }
             Choice::Panic => {
                 self.session.abandon(&task.game_id, &task.question.id)?;
@@ -165,11 +211,13 @@ impl BadgeActivities {
                     }
                 }
                 show_panic(&self.display, &self.identity.callsign)?;
-                let recovery_started = Instant::now();
-                while recovery_started.elapsed() < RECOVERY_COOLDOWN {
-                    ctx.record_heartbeat(Vec::new());
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
+                log::warn!(
+                    "simulated crash: suppressing heartbeats for {} seconds",
+                    HEARTBEAT_BLACKOUT.as_secs()
+                );
+                // Intentionally do not heartbeat or complete. Temporal's
+                // heartbeat timeout retries this Activity on another Worker.
+                tokio::time::sleep(HEARTBEAT_BLACKOUT).await;
                 show_recovered(&self.display, &self.identity.callsign)?;
                 if let Some(handle) = ctx.workflow_handle::<GameWorkflow>() {
                     if let Err(error) = handle
@@ -183,7 +231,7 @@ impl BadgeActivities {
                         log::warn!("could not signal recovery: {error}");
                     }
                 }
-                Err(anyhow!("simulated badge Worker crash").into())
+                Err(anyhow!("simulated badge Worker crash after heartbeat timeout").into())
             }
         }
     }
@@ -278,7 +326,7 @@ impl BadgeActivities {
         tokio::spawn(async move {
             let wait_ms = deadline_unix_ms.saturating_sub(unix_ms());
             tokio::time::sleep(Duration::from_millis(wait_ms)).await;
-            for _ in 0..40 {
+            for _ in 0..45 {
                 match handle
                     .query(GameWorkflow::snapshot, (), WorkflowQueryOptions::default())
                     .await
@@ -296,7 +344,7 @@ impl BadgeActivities {
                     Ok(_) => {}
                     Err(error) => log::warn!("result query pending: {error}"),
                 }
-                tokio::time::sleep(Duration::from_millis(250)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
             if let Ok(mut screen) = display.lock() {
                 let _ = screen.show_status(&identity.callsign, "RESULT PENDING");
@@ -383,6 +431,7 @@ async fn run_worker(
     // execute two question Activities concurrently.
     let mut tuner = TunerBuilder::default();
     tuner.activity_slot_supplier(Arc::new(FixedSizeSlotSupplier::<ActivitySlotKind>::new(1)));
+    let activity_active = Arc::new(AtomicBool::new(false));
     let worker_options = WorkerOptions::new(BADGE_TASK_QUEUE)
         .client_identity_override(identity.id.clone())
         .task_types(WorkerTaskTypes::activity_only())
@@ -392,15 +441,26 @@ async fn run_worker(
         ))
         .register_activities(BadgeActivities {
             display: Arc::clone(&display),
-            input,
+            input: Arc::clone(&input),
             identity: identity.clone(),
             session,
             watched_game: Mutex::new(None),
+            activity_active: Arc::clone(&activity_active),
         })
         .build();
     let mut worker =
         Worker::new(&core, client, worker_options).map_err(|error| anyhow!(error.to_string()))?;
     show_waiting(&display, &identity.callsign)?;
+    let sleep_display = Arc::clone(&display);
+    let sleep_input = Arc::clone(&input);
+    let sleep_callsign = identity.callsign.clone();
+    tokio::spawn(async move {
+        if let Err(error) =
+            power::monitor(sleep_display, sleep_input, activity_active, sleep_callsign).await
+        {
+            log::error!("sleep monitor stopped: {error:#}");
+        }
+    });
     log::info!("Polling trivia queue {BADGE_TASK_QUEUE} as {}", identity.id);
     worker.run().await?;
     Ok(())

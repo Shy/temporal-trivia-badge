@@ -4,13 +4,31 @@ set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 generated_defaults="$project_dir/.sdkconfig.partition.defaults"
 next_defaults="$generated_defaults.next"
-esp_gcc_dir="/Users/shy/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin"
 
-if [ ! -x "$esp_gcc_dir/xtensa-esp32s3-elf-gcc" ]; then
-    echo "missing Espressif compiler: $esp_gcc_dir/xtensa-esp32s3-elf-gcc" >&2
+if [ -n "${ESP_GCC_DIR:-}" ]; then
+    PATH="$ESP_GCC_DIR:$PATH"
+fi
+if ! command -v xtensa-esp32s3-elf-gcc >/dev/null 2>&1; then
+    tools_root=${IDF_TOOLS_PATH:-$HOME/.espressif}
+    for candidate in "$tools_root"/tools/xtensa-esp-elf/*/xtensa-esp-elf/bin; do
+        if [ -x "$candidate/xtensa-esp32s3-elf-gcc" ]; then
+            PATH="$candidate:$PATH"
+            break
+        fi
+    done
+fi
+if ! command -v xtensa-esp32s3-elf-gcc >/dev/null 2>&1; then
+    echo "missing xtensa-esp32s3-elf-gcc; run espup install and source its export file" >&2
     exit 1
 fi
-export PATH="$project_dir/.tools/bin:$esp_gcc_dir:$PATH"
+if [ -x "$project_dir/.tools/bin/ldproxy" ]; then
+    PATH="$project_dir/.tools/bin:$PATH"
+fi
+if ! command -v ldproxy >/dev/null 2>&1; then
+    echo "missing ldproxy; install it with: cargo install ldproxy" >&2
+    exit 1
+fi
+export PATH
 
 printf 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="%s/firmware/partitions.csv"\n' \
     "$project_dir" > "$next_defaults"
