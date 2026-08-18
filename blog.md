@@ -355,3 +355,18 @@
   `temporal-trivia-badges-v1`. Serial validation cannot judge the subjective
   OLED spacing, so the physical waiting screen remains the visual approval
   gate.
+
+## 2026-08-17 — Instruction-first passive badge screens
+
+- Physical review showed that reusing framed answer cells on waiting and result
+  screens made passive status look selectable. Kept the four framed directional
+  cells only on real question screens and retained the centered typography for
+  every other state.
+- Waiting now labels actual controls explicitly: `ANSWER: PRESS DIRECTION`,
+  `CRASH: HOLD LEFT+RIGHT`, and `SLEEP: HOLD DOWN 3 SEC`. Feedback, crash,
+  recovery, and sleep screens use short centered explanations instead of
+  decorative pseudo-buttons. Results use centered winner, score, place, and
+  right/wrong totals.
+- The revised ESP32-S3 release build passed in 2m10s with no warnings. Flashed
+  the 8,043,984-byte image to the Replay 2026 badge; PSRAM, Wi-Fi, and Temporal
+  Task Queue polling passed again.
