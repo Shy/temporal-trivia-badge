@@ -35,17 +35,20 @@ Open <http://127.0.0.1:3000> and mirror that browser window to the TV. Use
 `Ctrl+C` in the terminal to stop the controller.
 
 Always use `run-web.sh` for the demo. It marks the Worker as supervised and
-restarts it after the operator deliberately crashes the Mac process. The
-scoreboard shows Worker stopped, supervisor restart, Temporal reconnect, and
-History restored while Temporal replays the active Workflow.
+restarts it after the operator deliberately crashes the Mac process. The frozen
+board stays on screen and readable throughout — scores and score bars hold
+exactly where they were — while the rail steps through Worker stopped,
+supervisor restart, Temporal reconnect, and History restored.
 
 ## Run a game
 
 Click **START ROUND** after badges are polling. Only one round can run at a
 time, and badges that begin polling during an active round join automatically.
 
-Open the operator drawer with the small **TP7** test pad in the bottom-right
-corner or the `O` keyboard shortcut. Its Workflow Signals provide:
+Open the operator tray with the small **TP7** test pad in the bottom-right
+corner or the `O` keyboard shortcut. It rises from the bottom edge and the
+lanes compress upward, so every score stays visible while a Signal lands. Its
+Workflow Signals provide:
 
 - Double points for 10 seconds.
 - Rust-only scheduling for 10 seconds.

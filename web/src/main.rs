@@ -15,7 +15,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use axum::{
     Json, Router,
     extract::{Path as AxumPath, State},
-    http::StatusCode,
+    http::{StatusCode, header},
     response::{Html, IntoResponse, Response, Sse, sse::Event},
     routing::{get, post},
 };
@@ -44,6 +44,15 @@ use crate::{
 };
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
+// Assets are embedded rather than served from disk so the binary stays
+// self-contained, but they live on their own routes so index.html remains
+// readable. Revalidate on reload because these stable URLs are not content
+// hashed and may change when a new controller binary is deployed.
+const ORBIT_RINGS_SVG: &[u8] = include_bytes!("../static/orbit-rings.svg");
+const ASTRONAUT_SVG: &[u8] = include_bytes!("../static/astronaut.svg");
+const SPACE_GROTESK_TTF: &[u8] = include_bytes!("../static/space-grotesk.ttf");
+const SPACE_MONO_TTF: &[u8] = include_bytes!("../static/space-mono.ttf");
+const ASSET_CACHE_CONTROL: &str = "no-cache";
 const ACTIVE_WORKFLOW_ID: &str = "temporal-trivia-active";
 const SUPERVISOR_RESTART_EXIT: i32 = 75;
 const WORKFLOW_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -114,20 +123,27 @@ async fn main() -> Result<()> {
         active_workflow: Arc::new(Mutex::new(None)),
         events,
     };
-    resume_active_game(state.clone());
-    let app = Router::new()
-        .route("/", get(index))
-        .route("/api/state", get(current_state))
-        .route("/api/events", get(event_stream))
-        .route("/api/start", post(start_game))
-        .route("/api/chaos/{command}", post(apply_chaos))
-        .route("/api/history", get(round_history))
-        .route("/api/crash-worker", post(crash_worker))
-        .with_state(state);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
-    println!("Temporal Trivia controller: http://127.0.0.1:3000");
-
     let server = async move {
+        // Poll the Workflow concurrently with `worker.run()`, but do not
+        // accept HTTP connections until Temporal has answered the restoration
+        // query. The browser therefore keeps its frozen board throughout a
+        // supervised restart instead of seeing this process's empty default.
+        resume_active_game(state.clone()).await;
+        let app = Router::new()
+            .route("/", get(index))
+            .route("/assets/orbit-rings.svg", get(orbit_rings_asset))
+            .route("/assets/astronaut.svg", get(astronaut_asset))
+            .route("/assets/space-grotesk.ttf", get(space_grotesk_asset))
+            .route("/assets/space-mono.ttf", get(space_mono_asset))
+            .route("/api/state", get(current_state))
+            .route("/api/events", get(event_stream))
+            .route("/api/start", post(start_game))
+            .route("/api/chaos/{command}", post(apply_chaos))
+            .route("/api/history", get(round_history))
+            .route("/api/crash-worker", post(crash_worker))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
+        println!("Temporal Trivia controller: http://127.0.0.1:3000");
         axum::serve(listener, app)
             .await
             .map_err(|error| anyhow!(error))
@@ -138,6 +154,33 @@ async fn main() -> Result<()> {
 
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
+}
+
+fn asset(content_type: &'static str, body: &'static [u8]) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, ASSET_CACHE_CONTROL),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+async fn orbit_rings_asset() -> Response {
+    asset("image/svg+xml", ORBIT_RINGS_SVG)
+}
+
+async fn astronaut_asset() -> Response {
+    asset("image/svg+xml", ASTRONAUT_SVG)
+}
+
+async fn space_grotesk_asset() -> Response {
+    asset("font/ttf", SPACE_GROTESK_TTF)
+}
+
+async fn space_mono_asset() -> Response {
+    asset("font/ttf", SPACE_MONO_TTF)
 }
 
 async fn current_state(State(state): State<AppState>) -> Json<GameSnapshot> {
@@ -325,29 +368,27 @@ fn system_time_unix_ms(time: SystemTime) -> u64 {
         .as_millis() as u64
 }
 
-fn resume_active_game(state: AppState) {
-    tokio::spawn(async move {
-        let handle = state
-            .client
-            .get_workflow_handle::<GameWorkflowRun>(ACTIVE_WORKFLOW_ID);
-        let Ok(snapshot) = handle
-            .query(GameWorkflow::snapshot, (), WorkflowQueryOptions::default())
-            .await
-        else {
-            return;
-        };
-        let Some(game_id) = snapshot.game_id.clone() else {
-            return;
-        };
-        let running = snapshot.status == GameStatus::Running;
-        if running {
-            *state.active_workflow.lock().await = Some(game_id.clone());
-        }
-        publish(&state, snapshot).await;
-        if running {
-            observe_workflow(state, handle, game_id).await;
-        }
-    });
+async fn resume_active_game(state: AppState) {
+    let handle = state
+        .client
+        .get_workflow_handle::<GameWorkflowRun>(ACTIVE_WORKFLOW_ID);
+    let Ok(snapshot) = handle
+        .query(GameWorkflow::snapshot, (), WorkflowQueryOptions::default())
+        .await
+    else {
+        return;
+    };
+    let Some(game_id) = snapshot.game_id.clone() else {
+        return;
+    };
+    let running = snapshot.status == GameStatus::Running;
+    if running {
+        *state.active_workflow.lock().await = Some(game_id.clone());
+    }
+    publish(&state, snapshot).await;
+    if running {
+        tokio::spawn(observe_workflow(state, handle, game_id));
+    }
 }
 
 async fn observe_workflow(

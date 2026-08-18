@@ -393,3 +393,32 @@
   joined Wi-Fi, synchronized time, and resumed polling
   `temporal-trivia-badges-v1` as `KEEN-SEAL-70`. Serial cannot validate tactile
   quality, so the pulse strength and rhythm still require a hand test.
+
+## 2026-08-18 — PCB race-board redesign review
+
+- Reviewed the user-authored web redesign as a complete replacement rather
+  than an incremental styling pass. It adds a header timer/counter band,
+  routed-trace score bars, a last-answer and durable-event rail, a compact
+  bottom operator tray, and a dedicated finished-round summary while keeping
+  stable lane positions and the badge-derived substrate, gold, and silkscreen
+  palette.
+- Split the astronaut, orbit rings, Space Grotesk, and Space Mono out of the
+  HTML data URLs. The Rust binary still embeds each file, but serves it from a
+  typed `/assets/...` route so the source remains readable. Changed their
+  cache policy from one-year `immutable` caching to `no-cache` because the
+  stable route names are not content hashed and would otherwise retain stale
+  art after a new binary is deployed.
+- A real supervised Mac Worker crash exposed a restoration race. EventSource
+  could reconnect to the new process before its Temporal query completed,
+  briefly replacing the frozen race with an empty waiting state and declaring
+  recovery too early. The Workflow Worker and restoration query now start
+  concurrently, while the HTTP listener waits for the durable snapshot. A
+  repeated physical Cloud test preserved the same finished lane and winner
+  throughout restart, then reported `History replayed` without the empty-state
+  flash.
+- Host tests pass 12/12 and strict Clippy is clean. Inline JavaScript parses;
+  the four asset routes return the expected SVG/TTF content types. Browser
+  checks at 1920x1080 covered waiting, live, finished, operator, and recovery
+  states with no console errors or overflow. A 1400x700 viewport centered a
+  1244x700 stage, and an isolated eight-badge fixture produced two equal
+  four-row columns plus the bottom detail band without overflow.

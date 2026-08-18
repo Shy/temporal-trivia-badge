@@ -24,10 +24,14 @@
   Activity owns the answer controls.
 - The OLED uses wrapped questions, a compact 2x2 answer grid, and positional
   Nintendo-style glyphs rather than bare button letters.
-- The TV is a fixed 16:9 race board containing one timer and stable badge lanes.
-  Each lane contains only callsign, rank, Worker state, and score. Lanes never
-  reorder during a round; the final board freezes in place and labels all tied
-  winners.
+- The TV is a fixed 16:9 race board: a header band carrying the round timer and
+  live counters, the badge lanes, and a detail rail. Each lane contains
+  callsign, rank, Worker state, score, and a score bar drawn as a routed trace
+  whose length is relative to the current leader. Lanes never reorder during a
+  round; the final board freezes in place and labels all tied winners. The rail
+  carries the last resolved answer and a rolling feed of durable events, and
+  switches to a round summary when the round closes. Above six badges the lanes
+  split into two columns and the rail becomes a bottom band.
 - Operator controls send durable Workflow Signals for ten seconds of double
   points, ten seconds of Rust-only scheduling, sudden death on the next correct
   answer, and one `+30 seconds` timer extension.
