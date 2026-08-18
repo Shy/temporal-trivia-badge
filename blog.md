@@ -370,3 +370,26 @@
 - The revised ESP32-S3 release build passed in 2m10s with no warnings. Flashed
   the 8,043,984-byte image to the Replay 2026 badge; PSRAM, Wi-Fi, and Temporal
   Task Queue polling passed again.
+
+## 2026-08-17 — Restrained game haptics
+
+- Used the original Replay 2026 Echo firmware as the hardware and feel
+  reference: GPIO 6, 80 Hz PWM, 155/255 default strength, and 35 ms standard
+  pulses. The original shutdown has no dedicated pattern; its global button
+  repeat buzzes every 110 ms and accelerates to every 55 ms. Kept its
+  `3 -> 2 -> 1 -> 0` countdown motion but emitted only one pulse per number.
+- Added distinct patterns only for meaningful state transitions: one standard
+  pulse for correct, two softer pulses for wrong, one firm 120 ms pulse for a
+  simulated crash, two standard pulses for recovery, three rising pulses for
+  a win including ties, and one neutral pulse for other round results. Boot,
+  wake, routine input, networking, and Task Queue polling remain silent.
+- Centralized all motor access behind one async mutex so patterns cannot
+  overlap. Each energized pulse has a drop guard that forces GPIO duty back to
+  zero if its async task is cancelled, and the sleep path explicitly shuts the
+  motor off before entering deep sleep.
+- The host suite passed 12/12 tests. Two ESP32-S3 release builds passed in 2m15s
+  and 1m47s; the final 8,061,440-byte image occupied 54.91% of the application
+  partition. The connected badge booted with 16 MiB flash and 8 MiB PSRAM,
+  joined Wi-Fi, synchronized time, and resumed polling
+  `temporal-trivia-badges-v1` as `KEEN-SEAL-70`. Serial cannot validate tactile
+  quality, so the pulse strength and rhythm still require a hand test.

@@ -113,6 +113,11 @@ running. Set `ESPFLASH` to an executable path to override the flashing tool.
 - While waiting for work, hold **DOWN** for three seconds to sleep. Release it
   after `SLEEPING`, then press any face button to wake. Sleep is disabled while
   an Activity owns the controls.
+- Haptics are always on and reserved for meaningful state changes. The sleep
+  countdown pulses on `3`, `2`, `1`, and `0`; correct and wrong answers,
+  simulated crash/recovery, and round results each have distinct short
+  patterns. Routine input, polling, connection changes, boot, and wake are
+  silent.
 
 ## Firmware verification
 
@@ -125,6 +130,9 @@ The release build is the primary automated firmware gate:
 Physical verification requires checking the serial log and badge display after
 flashing. Confirm boot, PSRAM, Wi-Fi, Temporal polling, question rendering,
 button input, simulated crash, and sleep/wake behavior.
+
+Confirm the haptic strength and patterns by hand on the physical badge; serial
+logs can verify the event path but cannot verify how the motor feels.
 
 See the root [engineering journal](../blog.md) for the current Rust SDK
 portability patches and physical validation results.

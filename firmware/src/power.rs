@@ -9,7 +9,11 @@ use std::{
 use anyhow::{Result, bail};
 use esp_idf_svc::sys;
 
-use crate::{display::BadgeDisplay, input::BadgeInput};
+use crate::{
+    display::BadgeDisplay,
+    haptics::{self, HapticEvent, SharedHaptics},
+    input::BadgeInput,
+};
 
 const SLEEP_ARM_DELAY: Duration = Duration::from_millis(250);
 const SLEEP_HOLD: Duration = Duration::from_secs(3);
@@ -38,6 +42,7 @@ const BUTTON_WAKE_MASK: u64 = (1_u64 << sys::gpio_num_t_GPIO_NUM_0)
 pub async fn monitor(
     display: Arc<Mutex<BadgeDisplay>>,
     input: Arc<Mutex<BadgeInput>>,
+    haptics: SharedHaptics,
     activity_active: Arc<AtomicBool>,
     callsign: String,
 ) -> Result<()> {
@@ -70,6 +75,14 @@ pub async fn monitor(
         let elapsed = down_since.get_or_insert_with(Instant::now).elapsed();
         if elapsed >= SLEEP_HOLD {
             log::info!("DOWN held for 3 seconds; entering deep sleep");
+            if shown_second != Some(0) {
+                shown_second = Some(0);
+                display
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("display lock poisoned"))?
+                    .show_sleep_countdown(&callsign, 0)?;
+                haptics::play(&haptics, HapticEvent::SleepCountdown).await;
+            }
             {
                 let mut screen = display
                     .lock()
@@ -88,6 +101,7 @@ pub async fn monitor(
                 .lock()
                 .map_err(|_| anyhow::anyhow!("display lock poisoned"))?
                 .power_off()?;
+            haptics::off(&haptics).await?;
             enter_deep_sleep()?;
         }
 
@@ -100,6 +114,7 @@ pub async fn monitor(
                     .lock()
                     .map_err(|_| anyhow::anyhow!("display lock poisoned"))?
                     .show_sleep_countdown(&callsign, remaining_seconds)?;
+                haptics::play(&haptics, HapticEvent::SleepCountdown).await;
             }
         }
 

@@ -1,4 +1,5 @@
 mod display;
+mod haptics;
 mod identity;
 mod input;
 mod model;
@@ -18,7 +19,11 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
-    hal::peripherals::Peripherals,
+    hal::{
+        ledc::{LedcDriver, LedcTimerDriver, config::TimerConfig},
+        peripherals::Peripherals,
+        units::Hertz,
+    },
     io::vfs::MountedEventfs,
     nvs::EspDefaultNvsPartition,
     sntp::{EspSntp, SyncStatus},
@@ -42,6 +47,7 @@ use temporalio_sdk_core::{
 
 use crate::{
     display::BadgeDisplay,
+    haptics::{BadgeHaptics, HapticEvent, SharedHaptics},
     identity::{BadgeIdentity, factory_identity},
     input::BadgeInput,
     model::{BADGE_TASK_QUEUE, BadgeAnswer, BadgeEvent, GameInput, GameSnapshot, QuestionTask},
@@ -90,6 +96,7 @@ impl GameWorkflow {
 
 struct BadgeActivities {
     display: SharedDisplay,
+    haptics: SharedHaptics,
     input: SharedInput,
     identity: BadgeIdentity,
     session: Arc<SessionStore>,
@@ -171,6 +178,15 @@ impl BadgeActivities {
             Choice::Answer(selected_index) => {
                 let correct = selected_index == task.question.correct_index;
                 show_feedback(&self.display, &self.identity.callsign, correct)?;
+                haptics::play(
+                    &self.haptics,
+                    if correct {
+                        HapticEvent::Correct
+                    } else {
+                        HapticEvent::Wrong
+                    },
+                )
+                .await;
                 tokio::time::sleep(Duration::from_millis(350)).await;
                 show_waiting(&self.display, &self.identity.callsign)?;
                 let answer = BadgeAnswer {
@@ -213,6 +229,7 @@ impl BadgeActivities {
                     }
                 }
                 show_panic(&self.display, &self.identity.callsign)?;
+                haptics::play(&self.haptics, HapticEvent::Crash).await;
                 log::warn!(
                     "simulated crash: suppressing heartbeats for {} seconds",
                     HEARTBEAT_BLACKOUT.as_secs()
@@ -221,6 +238,7 @@ impl BadgeActivities {
                 // heartbeat timeout retries this Activity on another Worker.
                 tokio::time::sleep(HEARTBEAT_BLACKOUT).await;
                 show_recovered(&self.display, &self.identity.callsign)?;
+                haptics::play(&self.haptics, HapticEvent::Recovered).await;
                 if let Some(handle) = ctx.workflow_handle::<GameWorkflow>() {
                     if let Err(error) = handle
                         .signal(
@@ -337,6 +355,7 @@ impl BadgeActivities {
             previous.task.abort();
         }
         let display = Arc::clone(&self.display);
+        let haptics = Arc::clone(&self.haptics);
         let identity = self.identity.clone();
         let deadline_unix_ms = task.deadline_unix_ms;
         let game_id = task.game_id.clone();
@@ -349,6 +368,7 @@ impl BadgeActivities {
                     .await
                 {
                     Ok(snapshot) if snapshot.status == model::GameStatus::Finished => {
+                        let won = snapshot.winners.contains(&identity.callsign);
                         if let Ok(mut screen) = display.lock() {
                             if let Err(error) =
                                 screen.show_results(&identity.callsign, &identity.id, &snapshot)
@@ -356,6 +376,15 @@ impl BadgeActivities {
                                 log::error!("show final results: {error:#}");
                             }
                         }
+                        haptics::play(
+                            &haptics,
+                            if won {
+                                HapticEvent::Winner
+                            } else {
+                                HapticEvent::RoundOver
+                            },
+                        )
+                        .await;
                         return;
                     }
                     Ok(_) => {}
@@ -391,6 +420,19 @@ fn main() -> Result<()> {
         peripherals.pins.gpio17,
         peripherals.pins.gpio0,
     )?));
+    let haptic_timer = LedcTimerDriver::new(
+        peripherals.ledc.timer0,
+        &TimerConfig::new().frequency(Hertz(80)),
+    )
+    .context("configure haptic PWM timer")?;
+    let haptics = Arc::new(tokio::sync::Mutex::new(BadgeHaptics::new(
+        LedcDriver::new(
+            peripherals.ledc.channel0,
+            haptic_timer,
+            peripherals.pins.gpio6,
+        )
+        .context("configure GPIO6 haptic PWM")?,
+    )?));
     show_status(&display, &identity.callsign, "BOOTING")?;
 
     let sys_loop = EspSystemEventLoop::take().context("take system event loop")?;
@@ -413,12 +455,15 @@ fn main() -> Result<()> {
         .enable_all()
         .build()
         .context("build single-thread Tokio runtime")?;
-    runtime.block_on(Box::pin(run_worker(display, input, identity, session)))
+    runtime.block_on(Box::pin(run_worker(
+        display, input, haptics, identity, session,
+    )))
 }
 
 async fn run_worker(
     display: SharedDisplay,
     input: SharedInput,
+    haptics: SharedHaptics,
     identity: BadgeIdentity,
     session: Arc<SessionStore>,
 ) -> Result<()> {
@@ -459,6 +504,7 @@ async fn run_worker(
         ))
         .register_activities(BadgeActivities {
             display: Arc::clone(&display),
+            haptics: Arc::clone(&haptics),
             input: Arc::clone(&input),
             identity: identity.clone(),
             session,
@@ -471,10 +517,17 @@ async fn run_worker(
     show_waiting(&display, &identity.callsign)?;
     let sleep_display = Arc::clone(&display);
     let sleep_input = Arc::clone(&input);
+    let sleep_haptics = Arc::clone(&haptics);
     let sleep_callsign = identity.callsign.clone();
     tokio::spawn(async move {
-        if let Err(error) =
-            power::monitor(sleep_display, sleep_input, activity_active, sleep_callsign).await
+        if let Err(error) = power::monitor(
+            sleep_display,
+            sleep_input,
+            sleep_haptics,
+            activity_active,
+            sleep_callsign,
+        )
+        .await
         {
             log::error!("sleep monitor stopped: {error:#}");
         }
