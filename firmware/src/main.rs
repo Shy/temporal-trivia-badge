@@ -85,9 +85,6 @@ impl GameWorkflow {
     #[signal]
     fn recovered(&mut self, _ctx: &mut SyncWorkflowContext<Self>, _event: BadgeEvent) {}
 
-    #[signal]
-    fn wrong_answer(&mut self, _ctx: &mut SyncWorkflowContext<Self>, _answer: BadgeAnswer) {}
-
     #[query]
     fn snapshot(&self, _ctx: &WorkflowContextView) -> GameSnapshot {
         GameSnapshot::default()
@@ -143,18 +140,11 @@ impl BadgeActivities {
             .begin_game(&task.game_id, task.deadline_unix_ms)?;
         self.start_result_watcher(&ctx, &task)?;
 
-        if self
-            .session
-            .is_abandoned(&task.game_id, &task.question.id)?
-        {
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            return Err(anyhow!("badge already abandoned this question").into());
-        }
-
         let event = BadgeEvent {
             badge_id: self.identity.id.clone(),
             callsign: self.identity.callsign.clone(),
             question_id: task.question.id.clone(),
+            attempt: ctx.info().attempt,
         };
         if let Some(handle) = ctx.workflow_handle::<GameWorkflow>() {
             if let Err(error) = handle
@@ -167,6 +157,17 @@ impl BadgeActivities {
             {
                 log::warn!("could not signal badge start: {error}");
             }
+        }
+
+        // Report every real Temporal attempt before this Worker refuses a
+        // question it already abandoned. That keeps the public attempt count
+        // aligned with ActivityContext even when the same badge polls a retry.
+        if self
+            .session
+            .is_abandoned(&task.game_id, &task.question.id)?
+        {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            return Err(anyhow!("badge already abandoned this question").into());
         }
 
         show_question(&self.display, &self.identity.callsign, &task)?;
@@ -195,24 +196,10 @@ impl BadgeActivities {
                     question_id: task.question.id.clone(),
                     selected_index,
                 };
-                if correct {
-                    Ok(answer)
-                } else {
-                    self.session.abandon(&task.game_id, &task.question.id)?;
-                    if let Some(handle) = ctx.workflow_handle::<GameWorkflow>() {
-                        if let Err(error) = handle
-                            .signal(
-                                GameWorkflow::wrong_answer,
-                                answer,
-                                WorkflowSignalOptions::default(),
-                            )
-                            .await
-                        {
-                            log::warn!("could not signal wrong answer: {error}");
-                        }
-                    }
-                    Err(anyhow!("incorrect answer; retry question on another badge").into())
-                }
+                // A wrong answer is a valid game result, not an infrastructure
+                // failure. Complete the Activity normally so Temporal retries
+                // only genuine Worker loss and heartbeat timeouts.
+                Ok(answer)
             }
             Choice::Panic => {
                 self.session.abandon(&task.game_id, &task.question.id)?;

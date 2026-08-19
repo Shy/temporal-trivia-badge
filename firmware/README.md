@@ -108,8 +108,8 @@ running. Set `ESPFLASH` to an executable path to override the flashing tool.
 - Hold **LEFT+RIGHT** for 500 ms to simulate a Worker failure. The badge stops
   heartbeating for six seconds; Temporal's five-second heartbeat timeout makes
   the unfinished question available to another Worker.
-- A wrong answer applies the score penalty and fails the Activity retryably, so
-  the question returns to the Task Queue.
+- A wrong answer applies the score penalty and completes the Activity normally.
+  Only a simulated Worker failure returns the question to the Task Queue.
 - While waiting for work, hold **DOWN** for three seconds to sleep. Release it
   after `SLEEPING`, then press any face button to wake. Sleep is disabled while
   an Activity owns the controls.

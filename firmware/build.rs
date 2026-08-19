@@ -56,11 +56,16 @@ fn main() {
         firmware.join(".env.wifi"),
         firmware.join(".env.wifi"),
     );
-    let temporal_path = config_path(
-        "TEMPORAL_ENV_FILE",
-        project.join(".env.temporal"),
-        legacy_temporal,
-    );
+    let repo_env = project.join(".env");
+    let temporal_path = if repo_env.is_file() {
+        config_path("TEMPORAL_ENV_FILE", repo_env, legacy_temporal)
+    } else {
+        config_path(
+            "TEMPORAL_ENV_FILE",
+            project.join(".env.temporal"),
+            legacy_temporal,
+        )
+    };
     println!("cargo:rerun-if-changed={}", wifi_path.display());
     println!("cargo:rerun-if-changed={}", temporal_path.display());
 

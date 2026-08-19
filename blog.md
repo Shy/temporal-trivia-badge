@@ -422,3 +422,95 @@
   states with no console errors or overflow. A 1400x700 viewport centered a
   1244x700 stage, and an isolated eight-badge fixture produced two equal
   four-row columns plus the bottom detail band without overflow.
+
+## 2026-08-19 — Temporal-authentic game semantics
+
+- Revisited the demo from the Temporal history outward. Wrong answers were
+  previously sent through a Workflow Signal and then failed retryably, making
+  ordinary gameplay look like infrastructure failure. They now return as
+  successful Activity results, score `-1` (or `-2`), consume the question, and
+  never retry. Heartbeat timeout is now the only game-generated retry path.
+- Added the real `ActivityContext.info().attempt` to badge-start telemetry.
+  The Workflow deduplicates question/attempt pairs, records total Activity
+  attempts and heartbeat timeouts, and publishes `BADGE LOST` followed by
+  `WORK REASSIGNED`, the exact attempt number, and both callsigns. The badge
+  reports an attempt before consulting its abandoned-question NVS set so
+  retries refused by the same Worker still count as real Temporal attempts.
+- Replaced fire-and-forget chaos Signals with typed Workflow Updates and a
+  validator. Double points, Rust only, and sudden death cannot overlap; the
+  one-time 30-second extension remains independent. A live Cloud round accepted
+  double points and rejected Rust only with `double points is already active;
+  gameplay modifiers cannot overlap`.
+- Added evidence-backed Mac Worker recovery. The browser no longer advances
+  process, reconnect, or restoration stages with guessed timers. The server
+  exposes process ID, a per-process UUID, successful-query evidence, and SHA-256
+  digests for restored/current Workflow snapshots. In a live test, PID 81846
+  became 82703 and the restored digest exactly matched the frozen digest
+  `5be76a700ef1a648c1ecf163aa4d3bea79ac1b99cef053e16ebc719949161232`.
+- The hidden TP7 tray now resolves the exact Workflow ID and Run ID and opens
+  that execution in Temporal Cloud. Final results lead with the winner and use
+  compact proof counters for completed Activities, heartbeat timeouts,
+  reassignments, and total attempts. Raw Visibility/history remains operator
+  material.
+- Reduced optional Search Attributes to the agreed story fields:
+  `TriviaGameStatus`, `TriviaBadgeCount`, `TriviaReassignments`,
+  `TriviaWinner`, and `TriviaRustSdk`. Both the copied repo credentials and the
+  existing Temporal CLI `cloud` profile returned `Request unauthorized` for
+  namespace operator commands, so these remain optional and unregistered.
+- Repo-local `.env` is now the first credential source for both Workers, with
+  `.env.temporal` and the old TrafficLight file retained as fallbacks. The
+  populated file is mode 0600 and ignored by Git.
+- Host tests passed 16/16 and strict Clippy passed before the final firmware
+  rebuild. The first attempt-aware 8,069,264-byte image booted on
+  `KEEN-SEAL-70`, detected 16 MiB flash and 8 MiB PSRAM, joined `Shy-Fi`, and
+  polled `temporal-trivia-badges-v1`. A final rebuild was required after moving
+  attempt telemetry ahead of the NVS abandonment check; two-badge handoff
+  validation remains pending until a second serial device is connected.
+- The final release rebuild passed in 2m16s. Its 8,068,544-byte application
+  occupies 54.96% of the factory partition. Reflashed `KEEN-SEAL-70`; the
+  final ELF SHA prefix `9c75de5c1` booted, found 8 MiB PSRAM, joined Wi-Fi,
+  connected to Temporal Cloud, and resumed polling the shared Task Queue.
+- Re-ran the complete host suite after the compatibility and recovery tests:
+  16/16 passed, strict Clippy passed, inline JavaScript parsed, and
+  `git diff --check` passed. The final Rust controller remains live on port
+  3000. After a 30-second device poll, macOS still exposed only
+  `/dev/cu.usbmodem1133401`, so the agreed two-badge handoff gate is blocked on
+  connecting the second physical badge rather than on software or credentials.
+
+## 2026-08-19 — Two-badge physical failover
+
+- Flashed the same 8,068,544-byte image to a second badge at
+  `/dev/cu.usbmodem1132401`. It booted as `KEEN-RAVEN-C8`, joined `Shy-Fi` at
+  `192.168.1.79`, connected to Temporal Cloud, and polled the shared Activity
+  Task Queue alongside `KEEN-SEAL-70`.
+- The first normal-backlog test was invalid for handoff: both one-slot Workers
+  already held separate Activities, so neither could pick up the failed
+  Activity before the round deadline. `KEEN-RAVEN-C8` emitted two genuine fake
+  crash Signals, proving the 500 ms chord and heartbeat blackout, but the
+  retries stayed queued. Its OLED went blank after the exercise; a USB reset
+  restored a clean boot and display initialization. The serial log did not
+  show a crash or deep-sleep cause, so the blank-display cause remains
+  unresolved rather than attributed to Temporal.
+- Repeated the acceptance test with `backlog_override: 1`, leaving one Worker
+  intentionally free. A USB reset removed `KEEN-SEAL-70` while it owned
+  `rust-030` at attempt 1. Temporal's five-second heartbeat timeout moved that
+  same Activity to `KEEN-RAVEN-C8` at attempt 2 in under four seconds. The
+  Workflow recorded one heartbeat timeout, one reassignment, and two attempts.
+- That real reset exposed an observability flaw: the Workflow required a
+  best-effort `panic_event` Signal before labeling a later badge start as a
+  reassignment. Failed hardware cannot be trusted to send a final Signal. The
+  Workflow now treats Temporal's increasing Activity attempt number plus a
+  changed Worker identity as authoritative and uses the panic Signal only for
+  earlier presentation. The regression test brought the host suite to 17/17.
+- Found one stale OLED string from the old scoring model: a wrong answer still
+  said `QUESTION WILL RETRY`. Changed it to `WRONG ANSWER` and
+  `ACTIVITY COMPLETED` so the badge agrees with the successful Activity result
+  visible in Temporal history.
+- The later blank OLED on `KEEN-RAVEN-C8` was physical, not a firmware sleep
+  failure: reseating the display ribbon cable restored the screen, and the
+  badge then worked as expected. The earlier missing USB observation did not
+  establish a software cause and should not be used as evidence of one.
+- Final two-badge dress rehearsal passed as expected with both physical badges
+  running the release firmware against the live Rust controller and Temporal
+  Cloud. This closes the physical gameplay acceptance gate; the user approved
+  publishing the resulting game changes to GitHub.

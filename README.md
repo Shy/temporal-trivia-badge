@@ -26,8 +26,9 @@ both running for a physical game.
   Temporal payloads cannot drift independently.
 
 Temporal Cloud is the durable system of record. The laptop may restart and
-badges may disconnect without resetting the active Workflow. Failed or
-abandoned question Activities return to the Task Queue for another badge.
+badges may disconnect without resetting the active Workflow. Activities
+abandoned by a failed Worker return to the Task Queue for another badge. Wrong
+answers are successful Activity results and do not retry.
 
 ## Shared requirements
 
@@ -49,10 +50,10 @@ cd temporal-trivia-badge
 Both components use the same ignored Temporal Cloud configuration:
 
 ```sh
-cp .env.temporal.example .env.temporal
+cp .env.temporal.example .env
 ```
 
-Fill in `.env.temporal`:
+Fill in `.env`:
 
 ```dotenv
 TEMPORAL_ADDRESS=your-namespace.tmprl.cloud:7233
@@ -82,6 +83,6 @@ Component-specific build, test, and hardware verification commands live in the
 [firmware guide](firmware/README.md) and [web guide](web/README.md).
 
 The most recent physical validation covered build, flash, boot, Wi-Fi,
-Temporal Cloud polling, answers, sleep/wake, and supervised Mac Worker
-recovery on one Replay 2026 badge. A timeout visibly moving between two
-physical badges remains the outstanding multi-device validation.
+Temporal Cloud polling, answers, sleep/wake, supervised Mac Worker recovery,
+and a real heartbeat timeout moving the same Activity from
+`KEEN-SEAL-70` attempt 1 to `KEEN-RAVEN-C8` attempt 2.

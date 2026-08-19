@@ -139,6 +139,11 @@
       text-align: center;
     }
     .clock.urgent { color: var(--fault); }
+    .clock.extended { animation: timer-pulse 650ms ease-out; }
+    @keyframes timer-pulse {
+      0%, 100% { color: var(--silk); transform: scale(1); }
+      45% { color: var(--gold); transform: scale(1.12); }
+    }
     .stage.waiting .clock { visibility: hidden; }
     .stage.waiting .meters { visibility: hidden; }
     .stage.finished .clock { color: var(--silk-dim); }
@@ -190,7 +195,8 @@
       letter-spacing: .14em;
       text-transform: uppercase;
     }
-    .stage.recovering .fault-strip { display: block; }
+    .stage.recovering .fault-strip,
+    .stage.badge-fault .fault-strip { display: block; }
 
     /* ---------- board: lanes + rail ---------- */
     .board {
@@ -870,20 +876,20 @@
             <h2 class="winner-name" id="winnerName">No winner</h2>
           </div>
           <div class="slate-stats">
-            <span>correct<b id="statCorrect">0</b></span>
-            <span>retried<b id="statRetried">0</b></span>
-            <span>crashes<b id="statCrashes">0</b></span>
-            <span>handoffs<b id="statHandoffs">0</b></span>
+            <span>activities<b id="statActivities">0</b></span>
+            <span>timeouts<b id="statTimeouts">0</b></span>
+            <span>reassigned<b id="statHandoffs">0</b></span>
+            <span>attempts<b id="statAttempts">0</b></span>
           </div>
           <img class="slate-art" id="slateArt" alt="" src="/assets/astronaut.svg">
         </div>
         <div class="recovery" id="recovery" role="status" aria-live="assertive">
           <span class="panel-label">Worker recovery</span>
           <div class="steps" id="steps">
-            <span class="step">Worker stopped</span>
-            <span class="step">Supervisor restart</span>
-            <span class="step">Temporal reconnect</span>
-            <span class="step">History restored</span>
+            <span class="step">Process lost</span>
+            <span class="step">New process ID</span>
+            <span class="step">Temporal query</span>
+            <span class="step">State matched</span>
           </div>
           <span class="recovery-detail" id="recoveryDetail">Temporal is holding the game state</span>
         </div>
@@ -911,19 +917,22 @@
             <button class="tab active" id="chaosTab" type="button" role="tab" aria-selected="true" data-panel="chaosPanel">Chaos</button>
             <button class="tab" id="historyTab" type="button" role="tab" aria-selected="false" data-panel="historyPanel">History</button>
           </div>
-          <p class="tray-note" id="trayNote">Signals are durable Workflow events</p>
+          <p class="tray-note" id="trayNote">Validated Workflow Updates</p>
           <button class="tray-close" id="trayClose" type="button" aria-label="Close operator controls">&times;</button>
         </div>
         <section class="panel active" id="chaosPanel" role="tabpanel" aria-labelledby="chaosTab">
           <div class="controls">
-            <button class="control" type="button" data-chaos="double-points"><strong>Double points</strong><small>Signal // 10 seconds</small></button>
-            <button class="control" type="button" data-chaos="rust-only"><strong>Rust only</strong><small>Signal // 10 seconds</small></button>
+            <button class="control" type="button" data-chaos="double-points"><strong>Double points</strong><small>Update // 10 seconds</small></button>
+            <button class="control" type="button" data-chaos="rust-only"><strong>Rust only</strong><small>Update // 10 seconds</small></button>
             <button class="control" type="button" data-chaos="sudden-death"><strong>Sudden death</strong><small>Next correct answer wins</small></button>
             <button class="control" type="button" data-chaos="extend"><strong>+30 seconds</strong><small>Extend durable timer once</small></button>
             <button class="control crash" id="crashMac" type="button"><strong>Crash the Mac Worker</strong></button>
           </div>
         </section>
         <section class="panel" id="historyPanel" role="tabpanel" aria-labelledby="historyTab">
+          <div class="controls">
+            <button class="control" id="openWorkflow" type="button"><strong>Open current Workflow in Temporal</strong><small id="workflowMeta">Exact Workflow ID + Run ID</small></button>
+          </div>
           <div class="history-list" id="historyList"><div class="round"><strong>Loading Visibility&hellip;</strong></div></div>
         </section>
       </div>
@@ -951,7 +960,12 @@
     let eventSource;
     let toastTimer;
     let recoveryActive = false;
-    let recoveryTimers = [];
+    let recoveryPollTimer;
+    let recoveryProof = null;
+    let processLossObserved = false;
+    let currentProcessProof = null;
+    let lastFailureKey = null;
+    let badgeFaultTimer;
 
     const el = id => document.getElementById(id);
 
@@ -1000,10 +1014,27 @@
     function detectEvents(players, snapshot) {
       const reassignment = snapshot.latest_reassignment;
       const reassignmentKey = reassignment
-        ? reassignment.question_id + '|' + reassignment.from_callsign + '|' + reassignment.to_callsign
+        ? reassignment.question_id + '|' + reassignment.from_callsign + '|' + reassignment.to_callsign + '|' + reassignment.attempt
         : null;
       const reassignmentIsNew = reassignmentKey && reassignmentKey !== lastReassignmentKey;
       lastReassignmentKey = reassignmentKey;
+
+      const failure = snapshot.latest_failure;
+      const failureKey = failure
+        ? failure.question_id + '|' + failure.callsign + '|' + failure.attempt
+        : null;
+      if (failureKey && failureKey !== lastFailureKey && !reassignmentIsNew) {
+        showBadgeFault(
+          'BADGE LOST · HEARTBEAT TIMEOUT · ACTIVITY RETRY SCHEDULED'
+        );
+      }
+      lastFailureKey = failureKey;
+      if (reassignmentIsNew) {
+        showBadgeFault(
+          'WORK REASSIGNED · ATTEMPT ' + reassignment.attempt + ' · ' +
+          reassignment.from_callsign + ' → ' + reassignment.to_callsign
+        );
+      }
 
       for (const player of players) {
         const previous = previousStats.get(player.badge_id);
@@ -1011,14 +1042,14 @@
           if (player.panics > previous.panics) {
             noteEvent(player.badge_id, 'Crashed → Temporal retrying', 'fault');
           } else if (player.wrong > previous.wrong) {
-            noteEvent(player.badge_id, 'Wrong → question returned', 'fault');
+            noteEvent(player.badge_id, 'Wrong answer ' + (player.score - previous.score), 'fault');
           } else if (player.correct > previous.correct) {
             const gained = player.score - previous.score;
             noteEvent(player.badge_id, 'Correct ' + (gained >= 0 ? '+' : '') + gained, 'good');
           }
         }
         if (reassignmentIsNew && reassignment.to_callsign === player.callsign) {
-          noteEvent(player.badge_id, 'Picked up retry', 'good');
+          noteEvent(player.badge_id, 'Picked up attempt ' + reassignment.attempt, 'good');
         }
       }
       previousStats = new Map(players.map(player => [player.badge_id, {
@@ -1204,11 +1235,10 @@
       const winners = snapshot.winners || [];
       el('slateLabel').textContent = winners.length > 1 ? 'Tied winners' : 'Round closed';
       el('winnerName').textContent = winners.length ? winners.join(' + ') : 'No winner';
-      const total = key => players.reduce((sum, player) => sum + (player[key] || 0), 0);
-      el('statCorrect').textContent = total('correct');
-      el('statRetried').textContent = total('wrong');
-      el('statCrashes').textContent = total('panics');
+      el('statActivities').textContent = snapshot.completed_questions || 0;
+      el('statTimeouts').textContent = snapshot.heartbeat_timeouts || 0;
       el('statHandoffs').textContent = snapshot.reassignments || 0;
+      el('statAttempts').textContent = snapshot.activity_attempts || 0;
     }
 
     /* ---------- attract screen ---------- */
@@ -1247,8 +1277,16 @@
       const note = el('trayNote');
       note.textContent = chips.length
         ? 'Active // ' + chips.map(chip => chip[0]).join(' // ')
-        : 'Signals are durable Workflow events';
+        : 'Validated Workflow Updates';
       note.classList.toggle('active', chips.length > 0);
+      const gameplayModifierActive = chips.some(chip => chip[0] !== '+30 seconds');
+      document.querySelectorAll('[data-chaos]').forEach(button => {
+        const extension = button.dataset.chaos === 'extend';
+        button.disabled =
+          state.status !== 'running' ||
+          (extension && state.chaos?.extension_used) ||
+          (!extension && gameplayModifierActive);
+      });
     }
 
     /* ---------- render ---------- */
@@ -1263,6 +1301,7 @@
         previousStats = new Map();
         laneEvents = new Map();
         lastReassignmentKey = null;
+        lastFailureKey = null;
         spotShownSignature = null;
         spotPending = null;
         el('spotlight').classList.add('idle');
@@ -1293,12 +1332,6 @@
       el('start').disabled = snapshot.status === 'running';
       el('restart').disabled = snapshot.status === 'running';
 
-      document.querySelectorAll('[data-chaos]').forEach(button => {
-        button.disabled =
-          snapshot.status !== 'running' ||
-          (button.dataset.chaos === 'extend' && snapshot.chaos?.extension_used) ||
-          (button.dataset.chaos === 'sudden-death' && snapshot.chaos?.sudden_death);
-      });
     }
 
     function tick() {
@@ -1316,15 +1349,21 @@
 
     /* ---------- recovery: no curtain, the frozen board stays readable ---------- */
 
-    function setRecoveryStage(stage, disconnected = false) {
-      const titles = disconnected
-        ? ['Connection lost', 'Supervisor restarting', 'Connecting to Temporal', 'Worker recovered']
-        : ['Mac Worker crashed', 'Supervisor restarting', 'Connecting to Temporal', 'Worker recovered'];
+    function showBadgeFault(message) {
+      if (recoveryActive) return;
+      clearTimeout(badgeFaultTimer);
+      el('faultStrip').textContent = message;
+      el('stage').classList.add('badge-fault');
+      badgeFaultTimer = setTimeout(() => el('stage').classList.remove('badge-fault'), 3500);
+    }
+
+    function setRecoveryStage(stage, detail) {
+      const titles = ['MAC WORKER LOST', 'NEW PROCESS OBSERVED', 'TEMPORAL QUERY SUCCEEDED', 'WORKER RECOVERED'];
       const details = [
         'Temporal is holding the game state',
-        'Starting a new Rust Worker process',
-        'Waiting for the Worker to reconnect',
-        'History replayed · race state restored'
+        detail || 'Supervisor started a new Rust Worker process',
+        detail || 'Workflow state returned from Temporal Cloud',
+        detail || 'Returned Workflow state matches the frozen board'
       ];
       el('faultStrip').textContent = titles[stage];
       el('recoveryDetail').textContent = details[stage];
@@ -1334,26 +1373,60 @@
       });
     }
 
-    function beginRecovery(disconnected = false) {
-      if (recoveryActive) return;
+    function beginRecovery(proof = currentProcessProof) {
+      if (recoveryActive) {
+        processLossObserved = true;
+        setRecoveryStage(0);
+        return;
+      }
       recoveryActive = true;
-      recoveryTimers.forEach(clearTimeout);
-      recoveryTimers = [];
+      recoveryProof = proof;
+      processLossObserved = false;
+      clearTimeout(recoveryPollTimer);
       el('stage').classList.add('recovering');
-      setRecoveryStage(0, disconnected);
-      recoveryTimers.push(setTimeout(() => setRecoveryStage(1, disconnected), 500));
-      recoveryTimers.push(setTimeout(() => setRecoveryStage(2, disconnected), 1800));
+      el('faultStrip').textContent = 'CRASH REQUESTED';
+      el('recoveryDetail').textContent = 'Waiting for the Mac Worker process to exit';
+      pollRecovery();
+    }
+
+    async function pollRecovery() {
+      if (!recoveryActive) return;
+      try {
+        const response = await fetch('/api/recovery', {cache: 'no-store'});
+        if (!response.ok) throw new Error(await response.text());
+        const proof = await response.json();
+        const isNewProcess = recoveryProof && proof.instance_id !== recoveryProof.instance_id;
+        if (isNewProcess) {
+          if (!processLossObserved) {
+            processLossObserved = true;
+            setRecoveryStage(0);
+          }
+          setRecoveryStage(1, 'PID ' + proof.process_id + ' · instance ' + proof.instance_id.slice(0, 8));
+          if (proof.temporal_query_succeeded) {
+            setRecoveryStage(2, 'Workflow query succeeded in Temporal Cloud');
+          }
+          if (proof.temporal_query_succeeded && proof.restored_snapshot_digest === recoveryProof.snapshot_digest) {
+            currentProcessProof = proof;
+            render(proof.snapshot);
+            setRecoveryStage(3);
+            clearTimeout(recoveryPollTimer);
+            recoveryPollTimer = setTimeout(() => {
+              el('stage').classList.remove('recovering');
+              recoveryActive = false;
+            }, 2500);
+            return;
+          }
+        }
+      } catch (_) {
+        processLossObserved = true;
+        setRecoveryStage(0);
+      }
+      recoveryPollTimer = setTimeout(pollRecovery, 250);
     }
 
     function completeRecovery() {
       if (!recoveryActive) return;
-      recoveryTimers.forEach(clearTimeout);
-      recoveryTimers = [];
-      setRecoveryStage(3);
-      recoveryTimers.push(setTimeout(() => {
-        el('stage').classList.remove('recovering');
-        recoveryActive = false;
-      }, 2500));
+      pollRecovery();
     }
 
     function showError(message) {
@@ -1367,7 +1440,9 @@
     async function refreshState() {
       const response = await fetch('/api/state');
       if (!response.ok) throw new Error(await response.text());
-      render(await response.json());
+      const snapshot = await response.json();
+      if (!recoveryActive) render(snapshot);
+      return snapshot;
     }
 
     function connectEvents() {
@@ -1376,14 +1451,16 @@
       eventSource.onopen = async () => {
         try {
           await refreshState();
-          completeRecovery();
+          if (recoveryActive) completeRecovery();
         } catch (error) {
-          beginRecovery(true);
+          beginRecovery();
           showError(error.message);
         }
       };
-      eventSource.onmessage = event => render(JSON.parse(event.data));
-      eventSource.onerror = () => beginRecovery(true);
+      eventSource.onmessage = event => {
+        if (!recoveryActive) render(JSON.parse(event.data));
+      };
+      eventSource.onerror = () => beginRecovery();
     }
 
     /* ---------- operator tray ---------- */
@@ -1420,9 +1497,10 @@
           stats.textContent =
             round.badge_count + ' BADGES // ' +
             round.correct_answers + ' CORRECT // ' +
-            round.wrong_answers + ' RETRIED // ' +
-            round.crashes + ' CRASHES // ' +
-            round.reassignments + ' HANDOFFS';
+            round.wrong_answers + ' WRONG // ' +
+            round.heartbeat_timeouts + ' TIMEOUTS // ' +
+            round.reassignments + ' REASSIGNED // ' +
+            round.activity_attempts + ' ATTEMPTS';
           row.append(winner, time, stats);
           return row;
         }));
@@ -1458,9 +1536,16 @@
       button.addEventListener('click', async () => {
         button.disabled = true;
         try {
+          const extending = button.dataset.chaos === 'extend';
           const response = await fetch('/api/chaos/' + button.dataset.chaos, {method: 'POST'});
           if (!response.ok) throw new Error(await response.text());
           await refreshState();
+          if (extending) {
+            const clock = el('clock');
+            clock.classList.remove('extended');
+            void clock.offsetWidth;
+            clock.classList.add('extended');
+          }
         } catch (error) {
           showError(error.message);
           button.disabled = false;
@@ -1470,10 +1555,25 @@
 
     el('crashMac').addEventListener('click', async () => {
       try {
+        const proofResponse = await fetch('/api/recovery', {cache: 'no-store'});
+        if (!proofResponse.ok) throw new Error(await proofResponse.text());
+        const proof = await proofResponse.json();
         const response = await fetch('/api/crash-worker', {method: 'POST'});
         if (!response.ok) throw new Error(await response.text());
         closeTray();
-        beginRecovery(false);
+        beginRecovery(proof);
+      } catch (error) {
+        showError(error.message);
+      }
+    });
+
+    el('openWorkflow').addEventListener('click', async () => {
+      try {
+        const response = await fetch('/api/workflow');
+        if (!response.ok) throw new Error(await response.text());
+        const workflow = await response.json();
+        el('workflowMeta').textContent = workflow.workflow_id + ' // ' + workflow.run_id;
+        window.open(workflow.temporal_ui_url, '_blank', 'noopener');
       } catch (error) {
         showError(error.message);
       }
@@ -1506,10 +1606,16 @@
       });
     });
 
-    refreshState()
-      .then(connectEvents)
+    Promise.all([
+      refreshState(),
+      fetch('/api/recovery', {cache: 'no-store'}).then(response => response.json())
+    ])
+      .then(([, proof]) => {
+        currentProcessProof = proof;
+        connectEvents();
+      })
       .catch(() => {
-        beginRecovery(true);
+        beginRecovery();
         connectEvents();
       });
     tick();

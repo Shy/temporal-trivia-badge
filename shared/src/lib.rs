@@ -175,6 +175,13 @@ pub struct BadgeEvent {
     pub badge_id: String,
     pub callsign: String,
     pub question_id: String,
+    /// The real Temporal Activity attempt, starting at one.
+    #[serde(default = "default_attempt")]
+    pub attempt: u32,
+}
+
+const fn default_attempt() -> u32 {
+    1
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -200,6 +207,16 @@ pub struct Reassignment {
     pub from_callsign: String,
     pub to_callsign: String,
     pub reason: String,
+    #[serde(default = "default_attempt")]
+    pub attempt: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BadgeFailure {
+    pub question_id: String,
+    pub callsign: String,
+    #[serde(default = "default_attempt")]
+    pub attempt: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -261,7 +278,13 @@ pub struct GameSnapshot {
     #[serde(default)]
     pub reassignments: u32,
     #[serde(default)]
+    pub heartbeat_timeouts: u32,
+    #[serde(default)]
+    pub activity_attempts: u32,
+    #[serde(default)]
     pub latest_reassignment: Option<Reassignment>,
+    #[serde(default)]
+    pub latest_failure: Option<BadgeFailure>,
     #[serde(default)]
     pub chaos: ChaosState,
 }
@@ -374,5 +397,14 @@ mod tests {
         assert_eq!(values["TWO"], "hash # stays");
         assert_eq!(values["THREE"], "line\nvalue");
         assert!(parse_env("BROKEN='unterminated").is_err());
+    }
+
+    #[test]
+    fn legacy_badge_event_defaults_to_first_activity_attempt() {
+        let event: BadgeEvent = serde_json::from_str(
+            r#"{"badge_id":"badge-1","callsign":"KEEN-SEAL-70","question_id":"q-1"}"#,
+        )
+        .expect("legacy BadgeEvent payload");
+        assert_eq!(event.attempt, 1);
     }
 }

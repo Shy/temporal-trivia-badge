@@ -109,12 +109,12 @@ impl BadgeDisplay {
                 if correct {
                     "ANSWER ACCEPTED"
                 } else {
-                    "ANSWER FAILED"
+                    "WRONG ANSWER"
                 },
                 if correct {
                     "TEMPORAL RECORDED IT"
                 } else {
-                    "QUESTION WILL RETRY"
+                    "ACTIVITY COMPLETED"
                 },
             ],
         )

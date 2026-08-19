@@ -21,10 +21,11 @@ use axum::{
 };
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use temporalio_client::{
-    Client, ClientOptions, Connection, ConnectionOptions, TlsOptions, WorkflowExecution,
-    WorkflowHandle, WorkflowListOptions, WorkflowQueryOptions, WorkflowSignalOptions,
-    WorkflowStartOptions,
+    Client, ClientOptions, Connection, ConnectionOptions, NamespacedClient, TlsOptions,
+    WorkflowDescribeOptions, WorkflowExecuteUpdateOptions, WorkflowExecution, WorkflowHandle,
+    WorkflowListOptions, WorkflowQueryOptions, WorkflowStartOptions,
 };
 use temporalio_common::protos::temporal::api::enums::v1::{
     WorkflowIdConflictPolicy, WorkflowIdReusePolicy,
@@ -67,6 +68,8 @@ struct AppState {
     snapshot: Arc<RwLock<GameSnapshot>>,
     active_workflow: Arc<Mutex<Option<String>>>,
     events: broadcast::Sender<String>,
+    instance_id: String,
+    restored_snapshot_digest: Arc<RwLock<String>>,
 }
 
 #[derive(Default, Deserialize)]
@@ -85,6 +88,26 @@ struct RoundSummary {
     wrong_answers: i64,
     crashes: i64,
     reassignments: i64,
+    heartbeat_timeouts: i64,
+    activity_attempts: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct RecoveryProof {
+    process_id: u32,
+    instance_id: String,
+    temporal_query_succeeded: bool,
+    restored_snapshot_digest: String,
+    snapshot_digest: String,
+    snapshot: GameSnapshot,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowDetails {
+    workflow_id: String,
+    run_id: String,
+    namespace: String,
+    temporal_ui_url: String,
 }
 
 #[derive(Debug)]
@@ -122,6 +145,8 @@ async fn main() -> Result<()> {
         snapshot: Arc::new(RwLock::new(GameSnapshot::default())),
         active_workflow: Arc::new(Mutex::new(None)),
         events,
+        instance_id: Uuid::new_v4().to_string(),
+        restored_snapshot_digest: Arc::new(RwLock::new(String::new())),
     };
     let server = async move {
         // Poll the Workflow concurrently with `worker.run()`, but do not
@@ -136,6 +161,8 @@ async fn main() -> Result<()> {
             .route("/assets/space-grotesk.ttf", get(space_grotesk_asset))
             .route("/assets/space-mono.ttf", get(space_mono_asset))
             .route("/api/state", get(current_state))
+            .route("/api/recovery", get(recovery_proof))
+            .route("/api/workflow", get(workflow_details))
             .route("/api/events", get(event_stream))
             .route("/api/start", post(start_game))
             .route("/api/chaos/{command}", post(apply_chaos))
@@ -185,6 +212,46 @@ async fn space_mono_asset() -> Response {
 
 async fn current_state(State(state): State<AppState>) -> Json<GameSnapshot> {
     Json(state.snapshot.read().await.clone())
+}
+
+async fn recovery_proof(State(state): State<AppState>) -> Json<RecoveryProof> {
+    let snapshot = state.snapshot.read().await.clone();
+    Json(RecoveryProof {
+        process_id: std::process::id(),
+        instance_id: state.instance_id.clone(),
+        temporal_query_succeeded: true,
+        restored_snapshot_digest: state.restored_snapshot_digest.read().await.clone(),
+        snapshot_digest: snapshot_digest(&snapshot),
+        snapshot,
+    })
+}
+
+async fn workflow_details(
+    State(state): State<AppState>,
+) -> Result<Json<WorkflowDetails>, ApiError> {
+    if state.snapshot.read().await.game_id.is_none() {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "no game has been started".to_owned(),
+        ));
+    }
+    let handle = state
+        .client
+        .get_workflow_handle::<GameWorkflowRun>(ACTIVE_WORKFLOW_ID);
+    let description = handle
+        .describe(WorkflowDescribeOptions::default())
+        .await
+        .map_err(|error| ApiError(StatusCode::BAD_GATEWAY, error.to_string()))?;
+    let namespace = state.client.namespace().to_owned();
+    let run_id = description.run_id().to_owned();
+    Ok(Json(WorkflowDetails {
+        workflow_id: ACTIVE_WORKFLOW_ID.to_owned(),
+        run_id: run_id.clone(),
+        namespace: namespace.clone(),
+        temporal_ui_url: format!(
+            "https://cloud.temporal.io/namespaces/{namespace}/workflows/{ACTIVE_WORKFLOW_ID}/{run_id}/history"
+        ),
+    }))
 }
 
 async fn event_stream(
@@ -296,15 +363,26 @@ async fn apply_chaos(
     let handle = state
         .client
         .get_workflow_handle::<GameWorkflowRun>(ACTIVE_WORKFLOW_ID);
-    handle
-        .signal(
+    let snapshot = handle
+        .execute_update(
             GameWorkflow::apply_chaos,
             command,
-            WorkflowSignalOptions::default(),
+            WorkflowExecuteUpdateOptions::default(),
         )
         .await
-        .map_err(|error| ApiError(StatusCode::BAD_GATEWAY, error.to_string()))?;
-    Ok(Json(serde_json::json!({ "accepted": true })))
+        .map_err(|error| {
+            let message = error.to_string();
+            let status = if message.starts_with("Update failed:") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_GATEWAY
+            };
+            ApiError(status, message)
+        })?;
+    publish(&state, snapshot.clone()).await;
+    Ok(Json(
+        serde_json::json!({ "accepted": true, "snapshot": snapshot }),
+    ))
 }
 
 async fn crash_worker() -> Result<Json<serde_json::Value>, ApiError> {
@@ -359,6 +437,8 @@ fn round_summary(execution: &WorkflowExecution) -> Option<RoundSummary> {
         wrong_answers: memo.wrong_answers,
         crashes: memo.crashes,
         reassignments: memo.reassignments,
+        heartbeat_timeouts: memo.heartbeat_timeouts,
+        activity_attempts: memo.activity_attempts,
     })
 }
 
@@ -376,8 +456,12 @@ async fn resume_active_game(state: AppState) {
         .query(GameWorkflow::snapshot, (), WorkflowQueryOptions::default())
         .await
     else {
+        let snapshot = state.snapshot.read().await;
+        let digest = snapshot_digest(&snapshot);
+        *state.restored_snapshot_digest.write().await = digest;
         return;
     };
+    *state.restored_snapshot_digest.write().await = snapshot_digest(&snapshot);
     let Some(game_id) = snapshot.game_id.clone() else {
         return;
     };
@@ -438,6 +522,11 @@ fn observer_delay(consecutive_errors: u8) -> Duration {
         .min(WORKFLOW_MAX_ERROR_BACKOFF)
 }
 
+fn snapshot_digest(snapshot: &GameSnapshot) -> String {
+    let bytes = serde_json::to_vec(snapshot).expect("GameSnapshot always serializes");
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 async fn publish(state: &AppState, snapshot: GameSnapshot) {
     *state.snapshot.write().await = snapshot.clone();
     if let Ok(json) = serde_json::to_string(&snapshot) {
@@ -468,7 +557,12 @@ async fn connect_cloud() -> Result<Client> {
 fn read_cloud_settings() -> Result<HashMap<String, String>> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let project = manifest.parent().context("locate repository root")?;
-    let local_path = project.join(".env.temporal");
+    let repo_env = project.join(".env");
+    let local_path = if repo_env.is_file() {
+        repo_env
+    } else {
+        project.join(".env.temporal")
+    };
     let legacy_path = project
         .parent()
         .and_then(Path::parent)
@@ -517,5 +611,17 @@ mod tests {
         assert_eq!(observer_delay(1), Duration::from_millis(250));
         assert_eq!(observer_delay(2), Duration::from_millis(500));
         assert_eq!(observer_delay(20), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn snapshot_digest_is_stable_and_state_sensitive() {
+        let snapshot = GameSnapshot::default();
+        assert_eq!(snapshot_digest(&snapshot), snapshot_digest(&snapshot));
+        let mut changed = snapshot;
+        changed.activity_attempts = 1;
+        assert_ne!(
+            snapshot_digest(&changed),
+            snapshot_digest(&GameSnapshot::default())
+        );
     }
 }

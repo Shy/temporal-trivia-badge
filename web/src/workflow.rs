@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -13,9 +13,9 @@ use temporalio_sdk::{
 };
 
 use crate::model::{
-    AnswerSpotlight, BADGE_TASK_QUEUE, BadgeAnswer, BadgeEvent, CHAOS_DURATION_MS, ChaosCommand,
-    GAME_EXTENSION_MS, GameInput, GameSnapshot, GameStatus, PlayerScore, Question, QuestionTask,
-    Reassignment, RoundMemo,
+    AnswerSpotlight, BADGE_TASK_QUEUE, BadgeAnswer, BadgeEvent, BadgeFailure, CHAOS_DURATION_MS,
+    ChaosCommand, GAME_EXTENSION_MS, GameInput, GameSnapshot, GameStatus, PlayerScore, Question,
+    QuestionTask, Reassignment, RoundMemo,
 };
 
 pub struct BadgeActivities;
@@ -34,7 +34,9 @@ pub struct GameWorkflow {
     snapshot: GameSnapshot,
     assignments: BTreeMap<String, BadgeEvent>,
     retry_reasons: BTreeMap<String, String>,
+    attempts_seen: BTreeSet<String>,
     questions: BTreeMap<String, Question>,
+    index_search_attributes: bool,
 }
 
 pub type GameWorkflowRun = <GameWorkflow as temporalio_common::HasWorkflowDefinition>::Run;
@@ -51,12 +53,14 @@ impl GameWorkflow {
         ctx.state_mut(|state| {
             state.assignments.clear();
             state.retry_reasons.clear();
+            state.attempts_seen.clear();
             state.questions = input
                 .questions
                 .iter()
                 .cloned()
                 .map(|question| (question.id.clone(), question))
                 .collect();
+            state.index_search_attributes = input.index_search_attributes;
             state.snapshot = GameSnapshot {
                 game_id: Some(input.game_id.clone()),
                 status: GameStatus::Running,
@@ -67,7 +71,7 @@ impl GameWorkflow {
             state.snapshot.push_event("Round started".to_owned());
         });
         if input.index_search_attributes {
-            upsert_running_search_attributes(ctx, &input.game_id);
+            upsert_running_search_attributes(ctx);
         }
 
         type PendingResult = (
@@ -81,6 +85,7 @@ impl GameWorkflow {
 
         loop {
             let now_unix_ms = workflow_unix_ms(ctx);
+            ctx.state_mut(|state| expire_chaos(&mut state.snapshot, now_unix_ms));
             let deadline_unix_ms = ctx
                 .state(|state| state.snapshot.deadline_unix_ms)
                 .unwrap_or(now_unix_ms);
@@ -199,30 +204,43 @@ impl GameWorkflow {
     }
 
     #[signal]
-    pub fn badge_started(&mut self, _ctx: &mut SyncWorkflowContext<Self>, event: BadgeEvent) {
+    pub fn badge_started(&mut self, ctx: &mut SyncWorkflowContext<Self>, event: BadgeEvent) {
         if let Some(previous) = self.assignments.get(&event.question_id)
-            && previous.badge_id != event.badge_id
-            && let Some(reason) = self.retry_reasons.get(&event.question_id).cloned()
+            && is_reassignment(previous, &event)
         {
+            // Attempt is authoritative Temporal data. A failed Worker may be
+            // unable to send the best-effort panic Signal, so never require
+            // that Signal to recognize the retry.
+            let reason = self
+                .retry_reasons
+                .remove(&event.question_id)
+                .unwrap_or_else(|| "heartbeat timeout".to_owned());
             let reassignment = Reassignment {
                 question_id: event.question_id.clone(),
                 from_callsign: previous.callsign.clone(),
                 to_callsign: event.callsign.clone(),
                 reason,
+                attempt: event.attempt,
             };
             self.snapshot.reassignments += 1;
+            self.snapshot.heartbeat_timeouts += 1;
             self.snapshot.latest_reassignment = Some(reassignment.clone());
             self.snapshot.push_event(format!(
-                "Temporal retried {}: {} -> {} ({})",
-                reassignment.question_id,
+                "WORK REASSIGNED · {} -> {} · ATTEMPT {} · {}",
                 reassignment.from_callsign,
                 reassignment.to_callsign,
+                reassignment.attempt,
                 reassignment.reason
             ));
-            self.retry_reasons.remove(&event.question_id);
         }
         self.assignments
             .insert(event.question_id.clone(), event.clone());
+        if self
+            .attempts_seen
+            .insert(format!("{}:{}", event.question_id, event.attempt))
+        {
+            self.snapshot.activity_attempts += 1;
+        }
         if !self.snapshot.players.contains_key(&event.badge_id) {
             self.snapshot.players.insert(
                 event.badge_id.clone(),
@@ -235,12 +253,33 @@ impl GameWorkflow {
             self.snapshot
                 .push_event(format!("{} joined", event.callsign));
         }
+        if self.index_search_attributes {
+            ctx.upsert_search_attributes([
+                (
+                    "TriviaBadgeCount".to_owned(),
+                    (self.snapshot.players.len() as i64)
+                        .as_json_payload()
+                        .expect("badge count payload"),
+                ),
+                (
+                    "TriviaReassignments".to_owned(),
+                    (self.snapshot.reassignments as i64)
+                        .as_json_payload()
+                        .expect("reassignment payload"),
+                ),
+            ]);
+        }
     }
 
     #[signal]
     pub fn panic_event(&mut self, _ctx: &mut SyncWorkflowContext<Self>, event: BadgeEvent) {
         self.retry_reasons
             .insert(event.question_id.clone(), "heartbeat timeout".to_owned());
+        self.snapshot.latest_failure = Some(BadgeFailure {
+            question_id: event.question_id.clone(),
+            callsign: event.callsign.clone(),
+            attempt: event.attempt,
+        });
         let player = self
             .snapshot
             .players
@@ -263,57 +302,36 @@ impl GameWorkflow {
             .push_event(format!("{} recovered; question returned", event.callsign));
     }
 
-    #[signal]
-    pub fn wrong_answer(&mut self, ctx: &mut SyncWorkflowContext<Self>, answer: BadgeAnswer) {
-        let Some(question) = self.questions.get(&answer.question_id) else {
-            self.snapshot.push_event(format!(
-                "Rejected unknown question result from {}",
-                answer.callsign
-            ));
-            return;
-        };
-        if answer.selected_index > 3 || answer.selected_index == question.correct_index {
-            self.snapshot.push_event(format!(
-                "Rejected malformed wrong-answer signal from {}",
-                answer.callsign
-            ));
-            return;
+    #[update_validator(apply_chaos)]
+    fn validate_apply_chaos(
+        &self,
+        _ctx: &WorkflowContextView,
+        command: &ChaosCommand,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.snapshot.status != GameStatus::Running {
+            return Err("no game is running".into());
         }
-        let now_unix_ms = unix_ms(ctx.workflow_time().unwrap_or(UNIX_EPOCH));
-        let points = active_points(&self.snapshot, now_unix_ms);
-        let player = self
-            .snapshot
-            .players
-            .entry(answer.badge_id.clone())
-            .or_insert_with(|| PlayerScore {
-                badge_id: answer.badge_id.clone(),
-                callsign: answer.callsign.clone(),
-                ..Default::default()
-            });
-        player.score -= points;
-        player.wrong += 1;
-        let score = player.score;
-        self.snapshot.latest_answer = Some(AnswerSpotlight {
-            question: question.prompt.clone(),
-            correct_answer: question.answers[question.correct_index as usize].clone(),
-            callsign: answer.callsign.clone(),
-            was_correct: false,
-            score,
-            points,
-        });
-        self.snapshot.push_event(format!(
-            "{} missed {} ({}) — Temporal retrying",
-            answer.callsign, answer.question_id, -points
-        ));
-        self.retry_reasons
-            .insert(answer.question_id, "wrong answer".to_owned());
+        if *command == ChaosCommand::ExtendThirtySeconds {
+            return if self.snapshot.chaos.extension_used {
+                Err("the +30 second extension was already used".into())
+            } else {
+                Ok(())
+            };
+        }
+        if let Some(active) = active_modifier(&self.snapshot) {
+            return Err(
+                format!("{active} is already active; gameplay modifiers cannot overlap").into(),
+            );
+        }
+        Ok(())
     }
 
-    #[signal]
-    pub fn apply_chaos(&mut self, ctx: &mut SyncWorkflowContext<Self>, command: ChaosCommand) {
-        if self.snapshot.status != GameStatus::Running {
-            return;
-        }
+    #[update]
+    pub fn apply_chaos(
+        &mut self,
+        ctx: &mut SyncWorkflowContext<Self>,
+        command: ChaosCommand,
+    ) -> GameSnapshot {
         let now_unix_ms = unix_ms(ctx.workflow_time().unwrap_or(UNIX_EPOCH));
         match command {
             ChaosCommand::DoublePoints => {
@@ -332,7 +350,7 @@ impl GameWorkflow {
                 self.snapshot
                     .push_event("CHAOS: next correct answer ends the round".to_owned());
             }
-            ChaosCommand::ExtendThirtySeconds if !self.snapshot.chaos.extension_used => {
+            ChaosCommand::ExtendThirtySeconds => {
                 self.snapshot.chaos.extension_used = true;
                 self.snapshot.deadline_unix_ms = self
                     .snapshot
@@ -341,11 +359,8 @@ impl GameWorkflow {
                 self.snapshot
                     .push_event("CHAOS: Temporal timer extended by 30 seconds".to_owned());
             }
-            ChaosCommand::ExtendThirtySeconds => {
-                self.snapshot
-                    .push_event("CHAOS: +30 seconds was already used".to_owned());
-            }
         }
+        self.snapshot.clone()
     }
 
     #[query]
@@ -420,6 +435,39 @@ fn active_points(snapshot: &GameSnapshot, now_unix_ms: u64) -> i32 {
     }
 }
 
+fn is_reassignment(previous: &BadgeEvent, current: &BadgeEvent) -> bool {
+    previous.badge_id != current.badge_id && current.attempt > previous.attempt
+}
+
+fn active_modifier(snapshot: &GameSnapshot) -> Option<&'static str> {
+    if snapshot.chaos.double_points_until_unix_ms.is_some() {
+        Some("double points")
+    } else if snapshot.chaos.rust_only_until_unix_ms.is_some() {
+        Some("Rust only")
+    } else if snapshot.chaos.sudden_death {
+        Some("sudden death")
+    } else {
+        None
+    }
+}
+
+fn expire_chaos(snapshot: &mut GameSnapshot, now_unix_ms: u64) {
+    if snapshot
+        .chaos
+        .double_points_until_unix_ms
+        .is_some_and(|until| until <= now_unix_ms)
+    {
+        snapshot.chaos.double_points_until_unix_ms = None;
+    }
+    if snapshot
+        .chaos
+        .rust_only_until_unix_ms
+        .is_some_and(|until| until <= now_unix_ms)
+    {
+        snapshot.chaos.rust_only_until_unix_ms = None;
+    }
+}
+
 fn take_next_question(available: &mut VecDeque<Question>, rust_only: bool) -> Option<Question> {
     if rust_only {
         let index = available
@@ -435,71 +483,57 @@ fn workflow_unix_ms(ctx: &WorkflowContext<GameWorkflow>) -> u64 {
     unix_ms(ctx.workflow_time().unwrap_or(UNIX_EPOCH))
 }
 
-fn upsert_running_search_attributes(ctx: &WorkflowContext<GameWorkflow>, game_id: &str) {
+fn upsert_running_search_attributes(ctx: &WorkflowContext<GameWorkflow>) {
     ctx.upsert_search_attributes([
         (
-            "TriviaGameId".to_owned(),
-            game_id
-                .to_owned()
-                .as_json_payload()
-                .expect("game id payload"),
-        ),
-        (
-            "TriviaStatus".to_owned(),
+            "TriviaGameStatus".to_owned(),
             "Running"
                 .to_owned()
                 .as_json_payload()
                 .expect("status payload"),
+        ),
+        (
+            "TriviaBadgeCount".to_owned(),
+            0_i64.as_json_payload().expect("badge count payload"),
+        ),
+        (
+            "TriviaReassignments".to_owned(),
+            0_i64.as_json_payload().expect("reassignment payload"),
+        ),
+        (
+            "TriviaWinner".to_owned(),
+            "".to_owned().as_json_payload().expect("winner payload"),
+        ),
+        (
+            "TriviaRustSdk".to_owned(),
+            true.as_json_payload().expect("Rust SDK payload"),
         ),
     ]);
 }
 
 fn upsert_finished_search_attributes(ctx: &WorkflowContext<GameWorkflow>) {
     let snapshot = ctx.state(|state| state.snapshot.clone());
-    let correct = snapshot
-        .players
-        .values()
-        .map(|player| player.correct)
-        .sum::<u32>();
-    let wrong = snapshot
-        .players
-        .values()
-        .map(|player| player.wrong)
-        .sum::<u32>();
-    let panics = snapshot
-        .players
-        .values()
-        .map(|player| player.panics)
-        .sum::<u32>();
     ctx.upsert_search_attributes([
         (
-            "TriviaStatus".to_owned(),
+            "TriviaGameStatus".to_owned(),
             "Finished"
                 .to_owned()
                 .as_json_payload()
                 .expect("status payload"),
         ),
         (
-            "TriviaWinners".to_owned(),
-            snapshot.winners.as_json_payload().expect("winners payload"),
+            "TriviaWinner".to_owned(),
+            snapshot
+                .winners
+                .join(" + ")
+                .as_json_payload()
+                .expect("winner payload"),
         ),
         (
             "TriviaBadgeCount".to_owned(),
             (snapshot.players.len() as i64)
                 .as_json_payload()
                 .expect("badge count payload"),
-        ),
-        (
-            "TriviaCorrectAnswers".to_owned(),
-            (correct as i64).as_json_payload().expect("correct payload"),
-        ),
-        (
-            "TriviaWrongAnswers".to_owned(),
-            (wrong as i64).as_json_payload().expect("wrong payload"),
-        ),
-        (
-            "TriviaCrashes".to_owned(),
-            (panics as i64).as_json_payload().expect("crash payload"),
         ),
         (
             "TriviaReassignments".to_owned(),
@@ -568,5 +602,40 @@ mod tests {
         snapshot.chaos.double_points_until_unix_ms = Some(20_000);
         assert_eq!(active_points(&snapshot, 19_999), 2);
         assert_eq!(active_points(&snapshot, 20_000), 1);
+    }
+
+    #[test]
+    fn gameplay_modifiers_are_mutually_exclusive_but_extension_is_independent() {
+        let mut snapshot = GameSnapshot::default();
+        snapshot.chaos.rust_only_until_unix_ms = Some(20_000);
+        assert_eq!(active_modifier(&snapshot), Some("Rust only"));
+        expire_chaos(&mut snapshot, 20_000);
+        assert_eq!(active_modifier(&snapshot), None);
+        snapshot.chaos.extension_used = true;
+        assert_eq!(active_modifier(&snapshot), None);
+    }
+
+    #[test]
+    fn temporal_attempt_number_proves_reassignment_without_panic_signal() {
+        let previous = BadgeEvent {
+            badge_id: "badge-a".to_owned(),
+            callsign: "A".to_owned(),
+            question_id: "q".to_owned(),
+            attempt: 1,
+        };
+        let retry = BadgeEvent {
+            badge_id: "badge-b".to_owned(),
+            callsign: "B".to_owned(),
+            question_id: "q".to_owned(),
+            attempt: 2,
+        };
+        assert!(is_reassignment(&previous, &retry));
+        assert!(!is_reassignment(
+            &previous,
+            &BadgeEvent {
+                attempt: 1,
+                ..retry
+            }
+        ));
     }
 }

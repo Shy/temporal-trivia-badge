@@ -37,8 +37,9 @@ Open <http://127.0.0.1:3000> and mirror that browser window to the TV. Use
 Always use `run-web.sh` for the demo. It marks the Worker as supervised and
 restarts it after the operator deliberately crashes the Mac process. The frozen
 board stays on screen and readable throughout — scores and score bars hold
-exactly where they were — while the rail steps through Worker stopped,
-supervisor restart, Temporal reconnect, and History restored.
+exactly where they were — while the rail advances only after observing process
+loss, a new process ID, a successful Temporal query, and a restored-state
+digest matching the frozen board.
 
 ## Run a game
 
@@ -47,14 +48,18 @@ time, and badges that begin polling during an active round join automatically.
 
 Open the operator tray with the small **TP7** test pad in the bottom-right
 corner or the `O` keyboard shortcut. It rises from the bottom edge and the
-lanes compress upward, so every score stays visible while a Signal lands. Its
-Workflow Signals provide:
+lanes compress upward, so every score stays visible while an Update lands. Its
+validated Workflow Updates provide:
 
 - Double points for 10 seconds.
 - Rust-only scheduling for 10 seconds.
 - Sudden death, where the next correct answer ends the round.
 - One 30-second extension.
 - A supervised Mac Worker crash and automatic restart demonstration.
+
+Double points, Rust only, and sudden death are mutually exclusive. The timer
+extension is independent. The History tab includes the exact Workflow ID and
+Run ID and opens the current execution in Temporal Cloud.
 
 Completed rounds are stored in Workflow Memo and listed through Temporal
 Visibility. No database or namespace changes are required.

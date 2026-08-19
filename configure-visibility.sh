@@ -2,7 +2,10 @@
 set -eu
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-settings="$project_dir/.env.temporal"
+settings="$project_dir/.env"
+if [ ! -f "$settings" ]; then
+    settings="$project_dir/.env.temporal"
+fi
 if [ ! -f "$settings" ] && [ -f "$project_dir/../../TrafficLight/.env" ]; then
     settings="$project_dir/../../TrafficLight/.env"
 fi
@@ -39,11 +42,8 @@ register() {
         --type "$type"
 }
 
-register TriviaGameId Keyword
-register TriviaStatus Keyword
-register TriviaWinners KeywordList
+register TriviaGameStatus Keyword
 register TriviaBadgeCount Int
-register TriviaCorrectAnswers Int
-register TriviaWrongAnswers Int
-register TriviaCrashes Int
 register TriviaReassignments Int
+register TriviaWinner Keyword
+register TriviaRustSdk Bool

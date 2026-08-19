@@ -1,7 +1,7 @@
 pub use temporal_trivia_shared::{
-    AnswerSpotlight, BADGE_TASK_QUEUE, BadgeAnswer, BadgeEvent, CHAOS_DURATION_MS, ChaosCommand,
-    GAME_EXTENSION_MS, GAME_SECONDS, GameInput, GameSnapshot, GameStatus, PlayerScore, Question,
-    QuestionTask, Reassignment, WEB_TASK_QUEUE,
+    AnswerSpotlight, BADGE_TASK_QUEUE, BadgeAnswer, BadgeEvent, BadgeFailure, CHAOS_DURATION_MS,
+    ChaosCommand, GAME_EXTENSION_MS, GAME_SECONDS, GameInput, GameSnapshot, GameStatus,
+    PlayerScore, Question, QuestionTask, Reassignment, WEB_TASK_QUEUE,
 };
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,10 @@ pub struct RoundMemo {
     pub wrong_answers: i64,
     pub crashes: i64,
     pub reassignments: i64,
+    #[serde(default)]
+    pub heartbeat_timeouts: i64,
+    #[serde(default)]
+    pub activity_attempts: i64,
 }
 
 impl From<&GameSnapshot> for RoundMemo {
@@ -39,6 +43,23 @@ impl From<&GameSnapshot> for RoundMemo {
                 .map(|player| i64::from(player.panics))
                 .sum(),
             reassignments: i64::from(snapshot.reassignments),
+            heartbeat_timeouts: i64::from(snapshot.heartbeat_timeouts),
+            activity_attempts: i64::from(snapshot.activity_attempts),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_round_memos_default_new_temporal_counters() {
+        let memo: RoundMemo = serde_json::from_str(
+            r#"{"game_id":"g","winners":[],"badge_count":1,"correct_answers":2,"wrong_answers":1,"crashes":0,"reassignments":0}"#,
+        )
+        .expect("old round memo");
+        assert_eq!(memo.heartbeat_timeouts, 0);
+        assert_eq!(memo.activity_attempts, 0);
     }
 }
