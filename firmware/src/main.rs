@@ -60,6 +60,7 @@ const WORKER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const MAX_ACTIVITY_RUNTIME: Duration = Duration::from_secs(120);
 const POWERUP_OVERLAY: Duration = Duration::from_millis(1_500);
 const POWERUP_FRESHNESS_MS: u64 = 5_000;
+const GAME_SIGNAL_TIMEOUT: Duration = Duration::from_millis(750);
 const ACTIVE_WORKFLOW_ID: &str = "temporal-trivia-active";
 
 type SharedDisplay = Arc<Mutex<BadgeDisplay>>;
@@ -179,6 +180,10 @@ impl BadgeActivities {
     ) -> Result<BadgeAnswer, ActivityError> {
         let _active = ActivityActiveGuard::new(Arc::clone(&self.activity_active));
         let _current = CurrentQuestionGuard::new(Arc::clone(&self.current_question), task.clone())?;
+        // The Activity payload already contains everything needed to draw the
+        // question. Do that before NVS or Cloud telemetry so a slow Signal can
+        // never make a newly assigned badge look frozen.
+        show_question(&self.display, &self.identity.callsign, &task)?;
         self.session
             .begin_game(&task.game_id, task.deadline_unix_ms)?;
         self.start_result_watcher(&ctx, &task)?;
@@ -190,15 +195,19 @@ impl BadgeActivities {
             attempt: ctx.info().attempt,
         };
         if let Some(handle) = ctx.workflow_handle::<GameWorkflow>() {
-            if let Err(error) = handle
-                .signal(
+            match tokio::time::timeout(
+                GAME_SIGNAL_TIMEOUT,
+                handle.signal(
                     GameWorkflow::badge_started,
                     event.clone(),
                     WorkflowSignalOptions::default(),
-                )
-                .await
+                ),
+            )
+            .await
             {
-                log::warn!("could not signal badge start: {error}");
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => log::warn!("could not signal badge start: {error}"),
+                Err(_) => log::warn!("badge start Signal exceeded 750 ms; continuing Activity"),
             }
         }
 
@@ -213,7 +222,6 @@ impl BadgeActivities {
             return Err(anyhow!("badge already abandoned this question").into());
         }
 
-        show_question(&self.display, &self.identity.callsign, &task)?;
         let activity_deadline_unix_ms = task.latest_possible_deadline_unix_ms();
         match self
             .wait_for_choice(&ctx, activity_deadline_unix_ms)
@@ -246,20 +254,26 @@ impl BadgeActivities {
             }
             Choice::Panic => {
                 self.session.abandon(&task.game_id, &task.question.id)?;
+                show_panic(&self.display, &self.identity.callsign)?;
+                haptics::play(&self.haptics, HapticEvent::Crash).await;
                 if let Some(handle) = ctx.workflow_handle::<GameWorkflow>() {
-                    if let Err(error) = handle
-                        .signal(
+                    match tokio::time::timeout(
+                        GAME_SIGNAL_TIMEOUT,
+                        handle.signal(
                             GameWorkflow::panic_event,
                             event.clone(),
                             WorkflowSignalOptions::default(),
-                        )
-                        .await
+                        ),
+                    )
+                    .await
                     {
-                        log::warn!("could not signal panic: {error}");
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => log::warn!("could not signal panic: {error}"),
+                        Err(_) => {
+                            log::warn!("panic Signal exceeded 750 ms; starting heartbeat blackout")
+                        }
                     }
                 }
-                show_panic(&self.display, &self.identity.callsign)?;
-                haptics::play(&self.haptics, HapticEvent::Crash).await;
                 log::warn!(
                     "simulated crash: suppressing heartbeats for {} seconds",
                     HEARTBEAT_BLACKOUT.as_secs()
@@ -270,15 +284,19 @@ impl BadgeActivities {
                 show_recovered(&self.display, &self.identity.callsign)?;
                 haptics::play(&self.haptics, HapticEvent::Recovered).await;
                 if let Some(handle) = ctx.workflow_handle::<GameWorkflow>() {
-                    if let Err(error) = handle
-                        .signal(
+                    match tokio::time::timeout(
+                        GAME_SIGNAL_TIMEOUT,
+                        handle.signal(
                             GameWorkflow::recovered,
                             event,
                             WorkflowSignalOptions::default(),
-                        )
-                        .await
+                        ),
+                    )
+                    .await
                     {
-                        log::warn!("could not signal recovery: {error}");
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => log::warn!("could not signal recovery: {error}"),
+                        Err(_) => log::warn!("recovery Signal exceeded 750 ms; retrying Activity"),
                     }
                 }
                 Err(anyhow!("simulated badge Worker crash after heartbeat timeout").into())

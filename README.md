@@ -92,6 +92,22 @@ git diff --check
 Component-specific build, test, and hardware verification commands live in the
 [firmware guide](firmware/README.md) and [web guide](web/README.md).
 
+## Simulate badges on a Mac
+
+Start ten software badges against the configured Temporal Cloud namespace:
+
+```sh
+./simulate-badges.sh 10
+```
+
+The launcher creates one process per badge. Each process registers one real
+Rust SDK Activity Worker named `badge/SIM-01` through `badge/SIM-10`, with one
+Activity slot, on the same Task Queue used by the firmware. Stop all simulated
+badges together with `Ctrl-C`. Simulated badges answer correctly 80% of the
+time and incorrectly 20% of the time on a deterministic cadence, so the board
+exercises both score directions. Run `./run-web.sh` in another terminal to use
+the normal controller and web UI.
+
 The most recent physical validation covered build, flash, boot, Wi-Fi,
 Temporal Cloud polling, answers, sleep/wake, supervised Mac Worker recovery,
 and a real heartbeat timeout moving the same Activity from

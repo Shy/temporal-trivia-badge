@@ -24,3 +24,7 @@ temporalio-workflow = { version = "=0.7.0", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 uuid = { version = "1", features = ["v4"] }
+
+[[bin]]
+name = "simulate-badges"
+path = "src/bin/simulate_badges.rs"

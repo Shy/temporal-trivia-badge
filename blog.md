@@ -583,3 +583,120 @@
 - A final offline ESP32 release build passed without warnings after cfg-gating
   the SDK's desktop-only environment detector. The resulting ELF SHA-256 is
   `0ff514959c6f800659fa5ed3429ce9e6afad99006599aeee3c21536d6160fbba`.
+
+## 2026-08-20 — Ten-badge software dress rehearsal
+
+- Added a Mac-side Rust badge simulator that uses the same Cloud namespace,
+  `temporal-trivia-badges-v1` Task Queue, `trivia.answer_question` Activity,
+  game Signals, Worker identity convention, and one-Activity-slot limit as the
+  firmware. `./simulate-badges.sh 10` launches identities `badge/SIM-01`
+  through `badge/SIM-10` as separate processes.
+- The first design tried to register ten overlapping Activity Workers in one
+  process. SDK 0.7.0 rejected both a shared Runtime and ten separate Runtimes
+  with `Registration of multiple workers with overlapping worker task types on
+  the same namespace, task queue, and deployment build ID not allowed`.
+  Separate processes match the real deployment boundary and avoid the guard.
+- One simulated process received `Connection reset by peer (os error 54)` from
+  Cloud during initial connection. The launcher now restarts an individual
+  simulated badge after a two-second delay instead of reducing the field.
+- Live round `trivia-76f062d1455c4548babd0b71f74648ff` completed 460 of 469
+  scheduled Activities in one minute with all ten simulated badges scoring.
+  `SIM-05` and `SIM-10` tied for first at 57 correct answers each.
+- The connected physical `KEEN-RAVEN-C8` became an eleventh visible player and
+  held one Activity without answering. Temporal recorded a heartbeat timeout
+  and reassigned question `rust-016` to `SIM-03` on attempt 2, producing one
+  real handoff during the scale test.
+
+## 2026-08-20 — Booth hierarchy and responsive badge feedback
+
+- Incorporated review notes from a 16:9 finished-round screenshot without
+  changing the established PCB palette or board structure. Removed the via
+  circle from the lane divider, widened and centered the Winner/Tied plate,
+  aligned the score to the plate's vertical center, lowered the routed score
+  bar, made callsigns gray/gold, made retry telemetry gold, and kept settled
+  scores white.
+- New Round now enters a local three-part attract loop instead of immediately
+  creating another Workflow. Seven-second panels explain that badges are Rust
+  Workers, questions are Temporal Activities, missed heartbeats cause durable
+  retry, and the game lasts 60 seconds. The operator still deliberately starts
+  the next Workflow.
+- The perceived badge freeze at Activity start had a real ordering cause: the
+  firmware awaited the best-effort `badge_started` Signal before drawing a
+  question it already had. It now draws first and gives start, panic, and
+  recovery Signals a 750 ms ceiling. Panic feedback also appears before its
+  Signal round trip. The idle OLED now says `POLLING TEMPORAL` and
+  `NEXT QUESTION AUTO` so a quiet Task Queue does not look hung.
+- Host tests passed 14/14, strict Clippy passed, inline JavaScript parsed,
+  shell syntax and `git diff --check` passed, and the ESP32 release build
+  completed in 2m37s. Browser checks at 1920x1080 measured the Winner plate and
+  score at the same Y center, a 138 px plate, an 11 px name-to-bar gap, no
+  divider pseudo-element, and a white settled score. The attract loop advanced
+  from panel 1 to panel 2 after seven seconds, and a live ten-simulator round
+  populated all ten lanes within two seconds.
+- No `/dev/cu.usbmodem*` device was connected, so the new firmware could not be
+  flashed or judged on physical button-to-pixel latency in this pass. Hardware
+  responsiveness remains an explicit validation gate rather than a claimed
+  result.
+- Follow-up alignment moved each score to the full lane's vertical center and
+  balanced the callsign and settled telemetry around it. At 720p, the measured
+  score center was Y=148 and the midpoint between those two text rows was
+  Y=149.
+- The finished wide summary now lays winner and stats side by side instead of
+  stacking a two-row stats grid below the available bottom band. Automated
+  bounds checks found no frame escapes in running, finished, or intermission
+  states at both 1920x1080 and the smaller 16:9 browser viewport.
+- Simulated badges now choose a deterministic wrong answer on 20% of their
+  Activities. Live round `trivia-148a369208e14ac89db2ef81d04e8812`
+  completed 499 Activities with 398 correct and 101 wrong answers. The settled
+  board displayed every nonzero retry count in PCB gold with no containment
+  failures.
+- Winner/Tied now replaces the numeric rank in the first lane column instead
+  of adding a second label beside the callsign. A page-wide vertical alignment
+  audit moved the title, timer, and question/handoff counters onto one shared
+  header row; their measured center spread is 0 px at 720p and 1080p. Across
+  all ten lanes, rank and score centers match exactly and the callsign/status
+  midpoint remains within 1.65 px of the score center.
+- The same audit found the live Last Answer footer could escape the horizontal
+  detail rail at 720p. The ten-badge layout now uses a compact two-line question
+  treatment and vertically centered answer footer; automated checks found no
+  watched-content overflow at 720p or 1080p.
+- Refactored the single-file CSS around shared design tokens and low-specificity
+  visual-language primitives. Mono typography, uppercase labels, numeric
+  formatting, single-line truncation, the frame gutter, hairline stroke, and
+  pill radius now each have one source of truth; component blocks retain only
+  their distinct layout and appearance. Shared edges use logical inset,
+  padding, border, margin, and text-alignment properties so the CSS expresses
+  intent without paired left/right declarations.
+- Browser validation caught a cascade edge case during the cleanup: the generic
+  `button { font: inherit; }` rule outranked a zero-specificity shared mono
+  selector, causing operator tabs to render in Space Grotesk. A grouped
+  single-class button-role rule restores Space Mono without `!important` or
+  selector escalation. Finished, attract, and operator states retained their
+  expected typography and bounds at 720p and 1080p.
+- Follow-up visual review found that centering the header's three primary boxes
+  did not optically align their different font sizes. The title, timer, and
+  question/handoff counters now share a CSS grid baseline instead. Browser
+  bounds at 720p place their rendered bottoms within 2.29 px, accounting for
+  the fonts' different descenders.
+- Reproducing `TEMPORAL QUERY SUCCEEDED` exposed a recovery-only layout hazard:
+  an operator tray left open during an external Worker loss compressed the
+  five-row lane grid below its minimum content height. `beginRecovery()` now
+  closes the tray for every recovery path and blocks reopening until recovery
+  completes. With ten players, the final lane stayed within 0.04 px of the
+  lane-container boundary at 720p.
+- Removed the divider above the first player in each lane column while
+  preserving the full-width rule below the final row. The renderer marks column
+  starts from the computed row count, so the treatment remains correct when the
+  connected badge count changes. During validation, an initially misplaced
+  loop-index edit surfaced as `index is not defined`; startup render errors now
+  use the existing toast instead of silently presenting as Worker recovery.
+- Finished rounds now hold the winner board for 30 seconds and then enter the
+  existing three-panel attract animation without starting another Workflow.
+  Repeated finished snapshots cannot restart the timer, starting a new round
+  clears stale timer state, and an active Worker recovery delays the visual
+  transition until recovery completes. A timestamped browser run remained on
+  the finished board at 29 seconds and showed attract panel one at 31 seconds.
+- Matched the open top of the two lane columns to the same vertical rhythm as
+  the lower divider rows. At 720p, the header-rule-to-first-callsign gap had
+  been 30 px versus 20 px below; the board now removes that extra 10 px without
+  bringing back the two short top borders.

@@ -8,6 +8,7 @@ while true; do
     TRIVIA_SUPERVISED=1 cargo run \
         --manifest-path "$project_dir/Cargo.toml" \
         -p temporal-trivia-web \
+        --bin temporal-trivia-web \
         --target "$host_target"
     status=$?
     if [ "$status" -ne 75 ]; then

@@ -26,6 +26,11 @@
   Activity owns the answer controls.
 - The OLED uses wrapped questions, a compact 2x2 answer grid, and positional
   Nintendo-style glyphs rather than bare button letters.
+- A badge draws an assigned question before sending best-effort assignment
+  telemetry. Game Signals have a 750 ms UI-path ceiling, so a slow Cloud round
+  trip cannot leave the screen looking frozen. Between Activities the OLED
+  explicitly says it is polling Temporal and that the next question is
+  automatic.
 - The TV is a fixed 16:9 race board: a header band carrying the round timer and
   live counters, the badge lanes, and a detail rail. Each lane contains
   callsign, rank, Worker state, score, and a score bar drawn as a routed trace
@@ -34,6 +39,11 @@
   carries the last resolved answer and a rolling feed of durable events, and
   switches to a round summary when the round closes. Above six badges the lanes
   split into two columns and the rail becomes a bottom band.
+- Selecting New Round first opens a three-part booth attract loop explaining
+  Rust Workers, Temporal Activity retry, and the 60-second rules. Starting the
+  next Workflow remains a separate deliberate operator action. The finished
+  board remains visible for 30 seconds, then enters this attract loop
+  automatically; selecting New Round enters it immediately.
 - Operator controls execute validated Workflow Updates for ten seconds of
   double points, ten seconds of Rust-only scheduling, sudden death on the next
   correct answer, and one `+30 seconds` timer extension. The three gameplay

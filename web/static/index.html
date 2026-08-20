@@ -34,6 +34,11 @@
       --fault: #d45b52;
       --track: rgba(203, 180, 132, .3);
       --rule: rgba(241, 243, 245, .18);
+      --font-display: "Space Grotesk", sans-serif;
+      --font-mono: "Space Mono", monospace;
+      --frame-gutter: 4cqw;
+      --hairline: .09cqw;
+      --pill-radius: 999px;
       /* Board copy never renders below this. The operator scale is separate. */
       --floor: 2.2cqh;
       --ease: cubic-bezier(.22, .8, .28, 1);
@@ -50,9 +55,41 @@
       display: grid;
       place-items: center;
       color: var(--silk);
-      font-family: "Space Grotesk", sans-serif;
+      font-family: var(--font-display);
     }
     button { color: inherit; font: inherit; }
+
+    /* Shared visual-language primitives stay low-specificity so components can
+       override them without selector escalation. */
+    :where(
+      .round-id, .meters, .fault-strip, .rank, .callsign, .state,
+      .panel-label, .spot-a, .spot-who, .tick, .slate-stats, .step,
+      .recovery-detail, .attract-kicker, .attract-sub, .roster-label,
+      .roster-chip, .start, .restart, .tp, .tab, .tray-note, .tray-close,
+      .control small, .round strong, .round time, .round small, .toast
+    ) { font-family: var(--font-mono); }
+    :is(.start, .restart, .tp, .tab, .tray-close) {
+      font-family: var(--font-mono);
+    }
+    :where(
+      .brand h1, .round-id, .meters, .fault-strip, .winner-rank, .state,
+      .panel-label, .winner-name, .slate-stats, .step, .recovery-detail,
+      .attract-kicker, .attract-head, .attract-sub, .roster-label, .start,
+      .restart, .tab, .control.crash strong
+    ) { text-transform: uppercase; }
+    :where(.round-id, .callsign, .state, .spot-who, .round strong) {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    :where(.clock, .rank, .score, .spot-pts, .slate-stats b) {
+      font-variant-numeric: tabular-nums;
+    }
+    :where(
+      .round-id, .meters, .fault-strip, .winner-rank, .panel-label, .tick,
+      .slate-stats, .step, .attract-kicker, .roster-label, .roster-chip
+    ) { font-size: var(--floor); }
+
     .stage {
       position: relative;
       width: min(100vw, 177.7777778vh);
@@ -83,7 +120,7 @@
       opacity: .13;
       transition: opacity 400ms ease, transform 400ms ease;
     }
-    .stage.waiting .backdrop img {
+    .stage:is(.waiting, .intermission) .backdrop img {
       top: 50%;
       right: auto;
       left: 21cqw;
@@ -97,42 +134,39 @@
       position: absolute;
       z-index: 2;
       top: 3cqh;
-      left: 4cqw;
-      right: 4cqw;
+      inset-inline: var(--frame-gutter);
       height: 12cqh;
       display: grid;
       grid-template-columns: 1fr auto 1fr;
+      grid-template-rows: minmax(0, 1fr) auto;
       align-items: center;
       column-gap: 2cqw;
-      border-bottom: .09cqw solid rgba(241, 243, 245, .26);
+      row-gap: 1cqh;
+      border-bottom: var(--hairline) solid rgba(241, 243, 245, .26);
     }
+    .brand, .meters { display: contents; }
     .brand h1 {
+      grid-area: 1 / 1;
       margin: 0;
       font-size: 3.1cqh;
       line-height: 1;
       font-weight: 650;
       letter-spacing: .1em;
-      text-transform: uppercase;
     }
     .round-id {
+      grid-area: 2 / 1;
+      align-self: center;
       display: block;
-      overflow: hidden;
       max-width: 22cqw;
-      margin-top: 1cqh;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      margin-top: 0;
       color: var(--gold);
-      font-family: "Space Mono", monospace;
-      font-size: var(--floor);
       letter-spacing: .1em;
-      text-transform: uppercase;
     }
     .clock {
-      align-self: center;
+      grid-area: 1 / 2;
       min-width: 4.2em;
       color: var(--silk);
       font-size: 8cqh;
-      font-variant-numeric: tabular-nums;
       font-weight: 520;
       line-height: .9;
       letter-spacing: -.05em;
@@ -144,31 +178,38 @@
       0%, 100% { color: var(--silk); transform: scale(1); }
       45% { color: var(--gold); transform: scale(1.12); }
     }
-    .stage.waiting .clock { visibility: hidden; }
-    .stage.waiting .meters { visibility: hidden; }
+    .stage:is(.waiting, .intermission) :is(.clock, .meters) { visibility: hidden; }
     .stage.finished .clock { color: var(--silk-dim); }
     .meters {
-      justify-self: end;
-      display: grid;
-      justify-items: end;
-      row-gap: 1cqh;
-      font-family: "Space Mono", monospace;
-      font-size: var(--floor);
       letter-spacing: .08em;
-      text-transform: uppercase;
     }
-    .meter-row { display: flex; align-items: center; gap: 1.4cqw; color: var(--silk-dim); }
+    .meter-row {
+      grid-area: 1 / 3;
+      justify-self: end;
+      display: flex;
+      align-items: center;
+      gap: 1.4cqw;
+      color: var(--silk-dim);
+    }
+    :is(.brand h1, .clock, .meter-row) { align-self: baseline; }
     .meter::before {
       content: "";
       display: inline-block;
       width: .62cqw;
       aspect-ratio: 1;
       margin-right: .7cqw;
-      border: .09cqw solid var(--gold-dim);
+      border: var(--hairline) solid var(--gold-dim);
       border-radius: 50%;
       vertical-align: .05em;
     }
-    .chips { display: flex; gap: .8cqw; min-height: 3.2cqh; }
+    .chips {
+      grid-area: 2 / 3;
+      align-self: center;
+      justify-self: end;
+      display: flex;
+      gap: .8cqw;
+      min-height: 3.2cqh;
+    }
     .chip-on {
       padding: .55cqh 1cqw;
       color: var(--substrate-deep);
@@ -183,17 +224,13 @@
       position: absolute;
       z-index: 6;
       top: 16cqh;
-      left: 4cqw;
-      right: 4cqw;
+      inset-inline: var(--frame-gutter);
       display: none;
       padding: .9cqh 1.6cqw;
       color: var(--substrate-deep);
       background: var(--fault);
-      font-family: "Space Mono", monospace;
-      font-size: var(--floor);
       font-weight: 700;
       letter-spacing: .14em;
-      text-transform: uppercase;
     }
     .stage.recovering .fault-strip,
     .stage.badge-fault .fault-strip { display: block; }
@@ -202,9 +239,9 @@
     .board {
       position: absolute;
       z-index: 2;
-      top: 17.5cqh;
-      left: 4cqw;
-      right: 4cqw;
+      /* Match the header-rule-to-first-name rhythm to every lane divider. */
+      top: 16.1cqh;
+      inset-inline: var(--frame-gutter);
       bottom: 4.5cqh;
       display: grid;
       grid-template-columns: minmax(0, 1fr) 30cqw;
@@ -221,7 +258,7 @@
     .stage.finished .board { bottom: 9cqh; }
     .stage.tray-open .board { bottom: 20cqh; }
     .stage.tray-open.tray-tall .board { bottom: 36cqh; }
-    .stage.waiting .board { display: none; }
+    .stage:is(.waiting, .intermission) .board { display: none; }
     .stage.recovering .lanes { opacity: .75; }
 
     .lanes {
@@ -246,85 +283,69 @@
       max-height: var(--lane-h);
       display: grid;
       grid-template-columns: min-content minmax(0, 1fr) min-content;
-      grid-template-rows: auto auto auto;
+      grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
       align-content: center;
       column-gap: 1.8cqw;
-      row-gap: .5cqh;
+      row-gap: .65cqh;
       min-width: 0;
       padding-top: 1cqh;
-      border-top: .09cqw solid var(--rule);
+      border-block-start: var(--hairline) solid var(--rule);
     }
-    .lane::before {
-      content: "";
-      position: absolute;
-      left: -.3cqw;
-      top: -.32cqw;
-      width: .6cqw;
-      aspect-ratio: 1;
-      border: .09cqw solid var(--gold);
-      border-radius: 50%;
-      background: var(--substrate);
-    }
+    .lane.column-start { border-block-start-color: transparent; }
     .rank {
       grid-area: 1 / 1 / 4 / 2;
       align-self: center;
       color: var(--gold);
-      font-family: "Space Mono", monospace;
       font-size: max(var(--floor), calc(var(--lane-h) * .16));
-      font-variant-numeric: tabular-nums;
       letter-spacing: .04em;
     }
     .name-row {
       grid-area: 1 / 2 / 2 / 3;
       display: flex;
-      align-items: baseline;
+      align-items: center;
+      align-self: end;
       gap: 1.2cqw;
       min-width: 0;
     }
     .callsign {
-      overflow: hidden;
-      color: var(--silk);
-      font-family: "Space Mono", monospace;
-      font-size: min(4.3cqh, calc(var(--lane-h) * .3));
+      min-width: 0;
+      color: var(--silk-dim);
+      font-size: min(3.7cqh, calc(var(--lane-h) * .25));
       line-height: 1.05;
       letter-spacing: .04em;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
-    .plate {
-      flex: none;
+    .rank.winner-rank {
+      min-width: 7.2cqw;
       padding: .4cqh .8cqw;
-      border: .09cqw solid var(--gold);
+      border: var(--hairline) solid var(--gold);
       color: var(--gold);
-      font-family: "Space Mono", monospace;
-      font-size: var(--floor);
       font-weight: 700;
       letter-spacing: .14em;
-      text-transform: uppercase;
+      text-align: center;
     }
     .state {
       grid-area: 3 / 2 / 4 / 3;
-      overflow: hidden;
+      align-self: start;
       color: var(--silk-dim);
-      font-family: "Space Mono", monospace;
-      font-size: var(--floor);
+      font-size: max(var(--floor), calc(var(--lane-h) * .14));
       letter-spacing: .06em;
-      text-overflow: ellipsis;
-      text-transform: uppercase;
-      white-space: nowrap;
     }
     .state.fault { color: var(--fault); }
     .state.good { color: var(--gold); }
+    .state .retry { color: var(--gold); }
     .score {
       grid-area: 1 / 3 / 4 / 4;
       align-self: center;
-      min-width: 2.4ch;
-      font-size: min(8.6cqh, calc(var(--lane-h) * .6));
-      font-variant-numeric: tabular-nums;
+      justify-self: center;
+      min-width: 3.2ch;
+      max-width: 4.2ch;
+      overflow: hidden;
+      color: var(--silk);
+      font-size: min(7.4cqh, calc(var(--lane-h) * .5));
       font-weight: 500;
       line-height: .82;
       letter-spacing: -.05em;
-      text-align: right;
+      text-align: center;
       transition: color 140ms linear, text-shadow 140ms linear;
     }
     .score.up { color: var(--gold); text-shadow: 0 0 1.1cqw rgba(203, 180, 132, .55); }
@@ -337,6 +358,7 @@
       grid-area: 2 / 2 / 3 / 3;
       position: relative;
       height: 1.2cqh;
+      transform: translateY(.38cqh);
     }
     .bar::before {
       /* unrouted track: where this badge could still go */
@@ -357,7 +379,7 @@
       top: 50%;
       width: .6cqw;
       aspect-ratio: 1;
-      border: .09cqw solid var(--gold-dim);
+      border: var(--hairline) solid var(--gold-dim);
       border-radius: 50%;
       background: var(--substrate);
       transform: translateY(-50%);
@@ -391,18 +413,17 @@
     .routed.neg {
       left: auto;
       right: calc(100% - var(--origin));
+      min-width: 1.1cqw;
       width: calc(var(--origin) * var(--pct));
       background: var(--fault);
-      transition: width 320ms var(--ease);
     }
-    .routed.neg { min-width: 1.1cqw; }
     .routed.neg::after { right: auto; left: -.42cqw; border-color: var(--fault); }
     .lane.win .routed {
       background: var(--gold-bright);
       box-shadow: 0 0 1.3cqw rgba(203, 180, 132, .45);
     }
     .lane.win .routed::after { border-color: var(--gold-bright); }
-    .lane.win .callsign { color: var(--gold-bright); }
+    .lane.win .callsign { color: var(--gold); }
 
     /* ---------- rail ---------- */
     .rail {
@@ -410,8 +431,8 @@
       display: grid;
       grid-template-rows: auto minmax(0, 1fr);
       row-gap: 1.8cqh;
-      padding-left: 2.4cqw;
-      border-left: .09cqw solid rgba(203, 180, 132, .28);
+      padding-inline-start: 2.4cqw;
+      border-inline-start: var(--hairline) solid rgba(203, 180, 132, .28);
       min-width: 0;
       min-height: 0;
     }
@@ -419,19 +440,16 @@
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       grid-template-rows: minmax(0, 1fr);
       column-gap: 3cqw;
-      padding-left: 0;
+      padding-inline-start: 0;
       padding-top: 1.6cqh;
-      border-left: 0;
-      border-top: .09cqw solid rgba(203, 180, 132, .28);
+      border-inline-start: 0;
+      border-top: var(--hairline) solid rgba(203, 180, 132, .28);
     }
     .panel-label {
       display: block;
       margin-bottom: 1.1cqh;
       color: var(--gold);
-      font-family: "Space Mono", monospace;
-      font-size: var(--floor);
       letter-spacing: .18em;
-      text-transform: uppercase;
     }
     .spotlight { min-width: 0; }
     .spot-q {
@@ -448,46 +466,38 @@
       display: block;
       margin-top: 1.2cqh;
       color: var(--gold);
-      font-family: "Space Mono", monospace;
       font-size: 2.7cqh;
       letter-spacing: .04em;
     }
     .spot-foot {
       display: flex;
-      align-items: baseline;
+      align-items: center;
       justify-content: space-between;
       gap: 1cqw;
       margin-top: 1.4cqh;
       padding-top: 1.1cqh;
-      border-top: .09cqw solid var(--rule);
+      border-top: var(--hairline) solid var(--rule);
     }
     .spot-who {
-      overflow: hidden;
       color: var(--silk);
-      font-family: "Space Mono", monospace;
       font-size: 2.4cqh;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
     .spot-pts {
       flex: none;
       color: var(--gold);
       font-size: 4.2cqh;
-      font-variant-numeric: tabular-nums;
       font-weight: 500;
     }
     .spot-pts.miss { color: var(--fault); }
-    .spotlight.idle .spot-a, .spotlight.idle .spot-foot { visibility: hidden; }
+    .spotlight.idle :is(.spot-a, .spot-foot) { visibility: hidden; }
 
     .ticker { min-width: 0; min-height: 0; overflow: hidden; }
     .tick-list { display: grid; align-content: start; row-gap: .9cqh; }
     .tick {
       overflow: hidden;
-      padding-left: 1.2cqw;
-      border-left: .16cqw solid var(--gold-dim);
+      padding-inline-start: 1.2cqw;
+      border-inline-start: .16cqw solid var(--gold-dim);
       color: var(--silk-dim);
-      font-family: "Space Mono", monospace;
-      font-size: var(--floor);
       line-height: 1.3;
       letter-spacing: .04em;
       display: -webkit-box;
@@ -495,6 +505,29 @@
       -webkit-line-clamp: 2;
     }
     .stage.wide .tick { -webkit-line-clamp: 1; }
+    .stage.wide .spotlight {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto auto;
+      align-content: start;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .stage.wide .spotlight .panel-label { margin-bottom: .6cqh; }
+    .stage.wide .spot-q {
+      -webkit-line-clamp: 2;
+      font-size: 2.4cqh;
+      line-height: 1.18;
+    }
+    .stage.wide .spot-a {
+      margin-top: .6cqh;
+      font-size: 2.2cqh;
+    }
+    .stage.wide .spot-foot {
+      margin-top: .7cqh;
+      padding-top: .7cqh;
+    }
+    .stage.wide .spot-who { font-size: 2cqh; }
+    .stage.wide .spot-pts { font-size: 3.2cqh; }
     .tick.fault { color: var(--fault); border-color: var(--fault); }
     .tick.chaos { color: var(--gold); border-color: var(--gold); }
     .tick.recover { color: var(--silk); border-color: var(--gold); }
@@ -502,13 +535,17 @@
     /* ---------- result slate (finished) ---------- */
     .slate, .recovery { display: none; }
     .stage.finished .slate { display: grid; grid-template-rows: auto auto 1fr; }
-    .stage.finished .spotlight, .stage.finished .ticker { display: none; }
+    .stage.finished :is(.spotlight, .ticker) { display: none; }
     .stage.recovering .recovery { display: block; }
-    .stage.recovering .spotlight,
-    .stage.recovering .ticker,
-    .stage.recovering .slate { display: none; }
+    .stage.recovering :is(.spotlight, .ticker, .slate) { display: none; }
     .slate { grid-row: 1 / -1; min-width: 0; }
-    .stage.wide .slate { grid-column: 1 / -1; }
+    .stage.wide .slate {
+      grid-column: 1 / -1;
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      align-items: center;
+      column-gap: 3cqw;
+    }
     .winner-name {
       margin: 0;
       color: var(--gold-bright);
@@ -516,7 +553,6 @@
       font-weight: 600;
       line-height: 1.06;
       letter-spacing: .01em;
-      text-transform: uppercase;
       overflow-wrap: anywhere;
     }
     .slate-stats {
@@ -525,27 +561,33 @@
       gap: 1.2cqh 1.6cqw;
       margin-top: 2cqh;
       padding-top: 1.6cqh;
-      border-top: .09cqw solid var(--rule);
-      font-family: "Space Mono", monospace;
-      font-size: var(--floor);
+      border-top: var(--hairline) solid var(--rule);
       letter-spacing: .06em;
-      text-transform: uppercase;
     }
     .slate-stats b {
       display: block;
       color: var(--silk);
-      font-family: "Space Grotesk", sans-serif;
+      font-family: var(--font-display);
       font-size: 3.6cqh;
-      font-variant-numeric: tabular-nums;
       font-weight: 500;
     }
     .slate-stats span { color: var(--silk-dim); }
+    .stage.wide .slate-stats {
+      align-self: stretch;
+      align-content: center;
+      margin-top: 0;
+      padding-top: 0;
+      padding-inline-start: 2.4cqw;
+      border-top: 0;
+      border-inline-start: var(--hairline) solid var(--rule);
+    }
+    .stage.wide .winner-name { font-size: 4.5cqh; }
     .slate-art {
       align-self: end;
       justify-self: end;
       width: 12cqw;
       height: auto;
-      margin-right: .8cqw;
+      margin-inline-end: .8cqw;
       opacity: .8;
     }
     .stage.wide .slate-art { display: none; }
@@ -554,12 +596,9 @@
     .steps { display: grid; row-gap: 1.5cqh; margin-top: .4cqh; }
     .step {
       position: relative;
-      padding-left: 2.4cqw;
+      padding-inline-start: 2.4cqw;
       color: rgba(241, 243, 245, .3);
-      font-family: "Space Mono", monospace;
-      font-size: var(--floor);
       letter-spacing: .1em;
-      text-transform: uppercase;
     }
     .step::before {
       content: "";
@@ -579,55 +618,85 @@
       display: block;
       margin-top: 2.2cqh;
       color: var(--silk);
-      font-family: "Space Mono", monospace;
       font-size: 2.5cqh;
       letter-spacing: .06em;
-      text-transform: uppercase;
     }
 
     /* ---------- attract screen (waiting) ---------- */
     .attract {
       position: absolute;
       z-index: 2;
-      inset: 17.5cqh 4cqw 4.5cqh;
+      inset: 17.5cqh var(--frame-gutter) 4.5cqh;
       display: none;
       grid-template-columns: minmax(0, 30cqw) minmax(0, 1fr);
       align-items: center;
       column-gap: 5cqw;
     }
-    .stage.waiting .attract { display: grid; }
+    .stage:is(.waiting, .intermission) .attract { display: grid; }
     .attract-art { justify-self: center; width: 92%; height: auto; max-height: 60cqh; object-fit: contain; }
     .attract-copy { min-width: 0; }
+    .attract-kicker {
+      display: block;
+      margin-bottom: 1.4cqh;
+      color: var(--gold);
+      letter-spacing: .14em;
+    }
     .attract-head {
       margin: 0;
       font-size: 5.4cqh;
       font-weight: 600;
       line-height: 1.08;
       letter-spacing: .01em;
-      text-transform: uppercase;
     }
     .attract-sub {
       display: block;
       margin-top: 1.4cqh;
+      max-width: 48cqw;
       color: var(--silk-dim);
-      font-family: "Space Mono", monospace;
       font-size: 2.5cqh;
       letter-spacing: .08em;
-      text-transform: uppercase;
+    }
+    .story-progress {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: .7cqw;
+      max-width: 28cqw;
+      margin-top: 2.4cqh;
+    }
+    .story-step {
+      position: relative;
+      height: .28cqh;
+      overflow: hidden;
+      background: var(--track);
+    }
+    .story-step::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: var(--gold);
+      transform: scaleX(0);
+      transform-origin: left;
+    }
+    .story-step.done::after { transform: scaleX(1); }
+    .story-step.active::after { animation: story-fill 7s linear forwards; }
+    @keyframes story-fill { to { transform: scaleX(1); } }
+    .roster-label {
+      display: block;
+      margin-top: 2.5cqh;
+      color: var(--silk-dim);
+      letter-spacing: .08em;
     }
     .roster {
       display: flex;
       flex-wrap: wrap;
       gap: 1cqh 1cqw;
-      margin-top: 2.6cqh;
+      margin-top: 1.1cqh;
       min-height: 4cqh;
     }
     .roster-chip {
       padding: .7cqh 1.1cqw;
-      border: .09cqw solid var(--gold);
+      border: var(--hairline) solid var(--gold);
       color: var(--gold);
-      font-family: "Space Mono", monospace;
-      font-size: var(--floor);
       letter-spacing: .06em;
     }
     .start {
@@ -637,14 +706,12 @@
       padding: 0 3.2cqw;
       position: relative;
       border: .18cqw solid var(--gold);
-      border-radius: 999px;
+      border-radius: var(--pill-radius);
       color: var(--substrate-deep);
       background: var(--gold);
-      font-family: "Space Mono", monospace;
       font-size: 2.4cqh;
       font-weight: 700;
       letter-spacing: .2em;
-      text-transform: uppercase;
       cursor: pointer;
       box-shadow: inset 0 0 0 .42cqw var(--substrate), inset 0 0 0 .58cqw var(--gold);
     }
@@ -664,21 +731,19 @@
     .restart {
       position: absolute;
       z-index: 4;
-      left: 4cqw;
+      inset-inline-start: var(--frame-gutter);
       bottom: 1.2cqh;
       display: none;
       min-width: 15cqw;
       height: 5.4cqh;
       padding: 0 2.2cqw;
       border: .12cqw solid var(--gold);
-      border-radius: 999px;
+      border-radius: var(--pill-radius);
       color: var(--gold);
       background: var(--substrate);
-      font-family: "Space Mono", monospace;
       font-size: 1.9cqh;
       font-weight: 700;
       letter-spacing: .18em;
-      text-transform: uppercase;
       cursor: pointer;
     }
     .stage.finished .restart { display: block; }
@@ -693,11 +758,10 @@
       width: 2.4cqw;
       aspect-ratio: 1;
       padding: 0;
-      border: .09cqw solid var(--gold-dim);
+      border: var(--hairline) solid var(--gold-dim);
       border-radius: 50%;
       color: var(--gold-dim);
       background: transparent;
-      font-family: "Space Mono", monospace;
       font-size: .78cqw;
       cursor: pointer;
     }
@@ -705,8 +769,7 @@
     .tray {
       position: absolute;
       z-index: 8;
-      left: 4cqw;
-      right: 4cqw;
+      inset-inline: var(--frame-gutter);
       bottom: 0;
       height: 0;
       overflow: hidden;
@@ -715,7 +778,7 @@
     }
     .stage.tray-open .tray {
       height: 18cqh;
-      border-top: .09cqw solid var(--gold);
+      border-top: var(--hairline) solid var(--gold);
     }
     .stage.tray-open.tray-tall .tray { height: 34cqh; }
     .tray-inner {
@@ -729,20 +792,17 @@
     .tabs { display: flex; gap: .6cqw; }
     .tab {
       padding: .7cqh 1.4cqw;
-      border: .09cqw solid var(--gold-dim);
+      border: var(--hairline) solid var(--gold-dim);
       color: var(--silk-dim);
       background: transparent;
-      font-family: "Space Mono", monospace;
       font-size: 1.5cqh;
       letter-spacing: .14em;
-      text-transform: uppercase;
       cursor: pointer;
     }
     .tab.active { color: var(--substrate); background: var(--gold); border-color: var(--gold); }
     .tray-note {
       margin: 0 0 0 auto;
       color: var(--silk-dim);
-      font-family: "Space Mono", monospace;
       font-size: 1.4cqh;
       letter-spacing: .06em;
     }
@@ -751,9 +811,8 @@
       width: 2.4cqh;
       aspect-ratio: 1;
       padding: 0;
-      border: .09cqw solid var(--silk-dim);
+      border: var(--hairline) solid var(--silk-dim);
       background: transparent;
-      font-family: "Space Mono", monospace;
       font-size: 1.6cqh;
       cursor: pointer;
     }
@@ -764,10 +823,10 @@
       flex: 1;
       min-width: 0;
       padding: 1cqh 1cqw;
-      border: .09cqw solid var(--silk-dim);
+      border: var(--hairline) solid var(--silk-dim);
       color: var(--silk);
       background: transparent;
-      text-align: left;
+      text-align: start;
       cursor: pointer;
     }
     .control:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
@@ -777,31 +836,25 @@
     .control small {
       margin-top: .5cqh;
       color: var(--silk-dim);
-      font-family: "Space Mono", monospace;
       font-size: 1.2cqh;
       line-height: 1.35;
     }
     .control.crash { flex: 0 0 20%; border-color: var(--fault); color: var(--fault); text-align: center; }
-    .control.crash strong { text-transform: uppercase; letter-spacing: .1em; }
+    .control.crash strong { letter-spacing: .1em; }
     .history-list { display: grid; gap: .8cqh; }
     .round {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: .5cqh 1cqw;
       padding: .9cqh 1cqw;
-      border-left: .14cqw solid var(--gold);
+      border-inline-start: .14cqw solid var(--gold);
       background: var(--gold-faint);
     }
     .round strong {
-      overflow: hidden;
-      font-family: "Space Mono", monospace;
       font-size: 1.5cqh;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
     .round time, .round small {
       color: var(--silk-dim);
-      font-family: "Space Mono", monospace;
       font-size: 1.2cqh;
     }
     .round small { grid-column: 1 / -1; line-height: 1.45; }
@@ -815,10 +868,9 @@
       display: none;
       max-width: 62cqw;
       padding: 1.2cqh 1.5cqw;
-      border: .09cqw solid var(--fault);
+      border: var(--hairline) solid var(--fault);
       color: var(--fault);
       background: var(--substrate);
-      font-family: "Space Mono", monospace;
       font-size: 1.8cqh;
       text-align: center;
       transform: translateX(-50%);
@@ -830,6 +882,7 @@
     }
     @media (prefers-reduced-motion: reduce) {
       .routed, .board, .tray, .backdrop img, .lanes { transition: none; }
+      .story-step.active::after { animation: none; transform: scaleX(1); }
     }
   </style>
 </head>
@@ -899,10 +952,13 @@
     <section class="attract" id="attract" aria-label="Waiting for badges">
       <img class="attract-art" alt="" src="/assets/astronaut.svg" aria-hidden="true">
       <div class="attract-copy">
-        <h2 class="attract-head" id="attractHead">No badges yet</h2>
-        <span class="attract-sub" id="attractSub">Power on a badge to join the Task Queue</span>
+        <span class="attract-kicker" id="attractKicker">How it works · 01/03</span>
+        <h2 class="attract-head" id="attractHead">Every badge is a Rust Worker</h2>
+        <span class="attract-sub" id="attractSub">Questions are Temporal Activities delivered from one shared Task Queue.</span>
+        <div class="story-progress" id="storyProgress" aria-hidden="true"></div>
+        <span class="roster-label" id="rosterLabel">Waiting for the first Worker</span>
         <div class="roster" id="roster"></div>
-        <button class="start" id="start" type="button">Start round</button>
+        <button class="start" id="start" type="button">Start 60 sec round</button>
       </div>
     </section>
 
@@ -946,6 +1002,25 @@
     const EVENT_HOLD_MS = {fault: 6000, good: 2500};
     const MAX_LANES = 10;
     const TICK_LINES = 5;
+    const ATTRACT_STORY_MS = 7000;
+    const POST_ROUND_HOLD_MS = 30000;
+    const ATTRACT_STORIES = [
+      {
+        kicker: 'Temporal Rust SDK · 01/03',
+        head: 'Every badge is a Rust Worker',
+        sub: 'Questions are Temporal Activities delivered from one shared Task Queue.'
+      },
+      {
+        kicker: 'Durable execution · 02/03',
+        head: 'Crash one. Work survives.',
+        sub: 'A missed heartbeat returns unfinished work to Temporal for another badge to claim.'
+      },
+      {
+        kicker: 'Game rules · 03/03',
+        head: '60 seconds. Most work wins.',
+        sub: 'Correct is +1. Wrong is −1. Hold left + right to fake a Worker crash.'
+      }
+    ];
 
     let state = {status: 'waiting', players: {}, winners: [], chaos: {}, events: []};
     let activeGameId = null;
@@ -966,6 +1041,11 @@
     let currentProcessProof = null;
     let lastFailureKey = null;
     let badgeFaultTimer;
+    let intermissionMode = false;
+    let attractStoryIndex = -1;
+    let attractStoryStartedAt = Date.now();
+    let postRoundTimer;
+    let postRoundGameId = null;
 
     const el = id => document.getElementById(id);
 
@@ -999,12 +1079,31 @@
 
     /* ---------- per-lane state line: transient event, resting telemetry ---------- */
 
-    function restingState(player, snapshot) {
-      if (snapshot.status === 'waiting') return 'Polling task queue';
-      const parts = [player.correct + ' ok'];
-      if (player.wrong) parts.push(player.wrong + ' retry');
-      if (player.panics) parts.push(player.panics + ' crash');
-      return parts.join(' · ');
+    function paintRestingState(node, player, snapshot) {
+      if (snapshot.status === 'waiting') {
+        node.textContent = 'Polling task queue';
+        return;
+      }
+      const parts = [];
+      const correct = document.createElement('span');
+      correct.textContent = player.correct + ' ok';
+      parts.push(correct);
+      if (player.wrong) {
+        const retry = document.createElement('span');
+        retry.className = 'retry';
+        retry.textContent = player.wrong + ' retry';
+        parts.push(retry);
+      }
+      if (player.panics) {
+        const crashes = document.createElement('span');
+        crashes.textContent = player.panics + ' crash';
+        parts.push(crashes);
+      }
+      node.replaceChildren();
+      parts.forEach((part, index) => {
+        if (index) node.append(document.createTextNode(' · '));
+        node.append(part);
+      });
     }
 
     function noteEvent(badgeId, text, kind) {
@@ -1069,7 +1168,7 @@
           stateNode.className = 'state ' + pending.kind;
         } else {
           if (pending) laneEvents.delete(badgeId);
-          stateNode.textContent = restingState(player, state);
+          paintRestingState(stateNode, player, state);
           stateNode.className = 'state';
         }
       }
@@ -1127,28 +1226,23 @@
         lanes.style.setProperty('--lane-h', laneHeight.toFixed(2) + 'px');
       }
 
-      for (const player of players) {
+      for (const [index, player] of players.entries()) {
         let lane = laneNodes.get(player.badge_id);
         if (!lane) {
           lane = buildLane(player.badge_id);
           laneNodes.set(player.badge_id, lane);
         }
-        lane._player = player;
-        lane.querySelector('.rank').textContent = String(ranks.get(player.badge_id)).padStart(2, '0');
-        lane.querySelector('.callsign').textContent = player.callsign;
-
         const isWinner = winners.has(player.callsign);
+        lane._player = player;
+        const rank = lane.querySelector('.rank');
+        rank.classList.toggle('winner-rank', isWinner);
+        rank.textContent = isWinner
+          ? (winners.size > 1 ? 'Tied' : 'Winner')
+          : String(ranks.get(player.badge_id)).padStart(2, '0');
+        lane.querySelector('.callsign').textContent = player.callsign;
+        lane.classList.toggle('column-start', index === 0 || (twoColumns && index === rows));
         lane.classList.toggle('win', isWinner);
-        let plate = lane.querySelector('.plate');
-        if (isWinner && !plate) {
-          plate = document.createElement('span');
-          plate.className = 'plate';
-          lane.querySelector('.name-row').prepend(plate);
-        }
-        if (plate) {
-          plate.textContent = winners.size > 1 ? 'Tied' : 'Winner';
-          plate.hidden = !isWinner;
-        }
+        lane.querySelector('.plate')?.remove();
 
         /* Bar length is relative to the leader. All bars share one duration and
            easing so a rescale reads as a single coordinated settle. */
@@ -1245,17 +1339,31 @@
 
     function paintAttract(players) {
       const count = players.length;
-      el('attractHead').textContent = count
-        ? count + (count === 1 ? ' badge polling' : ' badges polling')
-        : 'No badges yet';
-      el('attractSub').textContent = count
-        ? 'Shared Task Queue · badges may join mid-round'
+      el('rosterLabel').textContent = count
+        ? count + (count === 1 ? ' Worker seen' : ' Workers seen') + ' · join anytime'
         : 'Power on a badge to join the Task Queue';
       el('roster').replaceChildren(...players.map(player => {
         const chip = document.createElement('span');
         chip.className = 'roster-chip';
         chip.textContent = player.callsign;
         return chip;
+      }));
+    }
+
+    function paintAttractStory(force = false) {
+      const stage = el('stage');
+      if (!stage.classList.contains('waiting') && !stage.classList.contains('intermission')) return;
+      const index = Math.floor((Date.now() - attractStoryStartedAt) / ATTRACT_STORY_MS) % ATTRACT_STORIES.length;
+      if (!force && index === attractStoryIndex) return;
+      attractStoryIndex = index;
+      const story = ATTRACT_STORIES[index];
+      el('attractKicker').textContent = story.kicker;
+      el('attractHead').textContent = story.head;
+      el('attractSub').textContent = story.sub;
+      el('storyProgress').replaceChildren(...ATTRACT_STORIES.map((_, storyIndex) => {
+        const step = document.createElement('span');
+        step.className = 'story-step ' + (storyIndex < index ? 'done' : storyIndex === index ? 'active' : '');
+        return step;
       }));
     }
 
@@ -1289,6 +1397,33 @@
       });
     }
 
+    function clearPostRoundTimer() {
+      clearTimeout(postRoundTimer);
+      postRoundTimer = undefined;
+    }
+
+    function schedulePostRoundIntermission(snapshot) {
+      if (snapshot.status !== 'finished' || intermissionMode) {
+        clearPostRoundTimer();
+        if (snapshot.status !== 'finished') postRoundGameId = null;
+        return;
+      }
+      if (postRoundGameId === snapshot.game_id) return;
+
+      clearPostRoundTimer();
+      postRoundGameId = snapshot.game_id;
+      const transition = () => {
+        postRoundTimer = undefined;
+        if (state.status !== 'finished' || state.game_id !== snapshot.game_id || intermissionMode) return;
+        if (recoveryActive) {
+          postRoundTimer = setTimeout(transition, 1000);
+          return;
+        }
+        enterIntermission();
+      };
+      postRoundTimer = setTimeout(transition, POST_ROUND_HOLD_MS);
+    }
+
     /* ---------- render ---------- */
 
     function render(snapshot) {
@@ -1310,8 +1445,11 @@
       state = snapshot;
 
       const stage = el('stage');
-      stage.classList.remove('waiting', 'running', 'finished');
-      stage.classList.add(snapshot.status || 'waiting');
+      stage.classList.remove('waiting', 'running', 'finished', 'intermission');
+      const visualStatus = intermissionMode && snapshot.status === 'finished'
+        ? 'intermission'
+        : (snapshot.status || 'waiting');
+      stage.classList.add(visualStatus);
 
       const players = orderedPlayers(snapshot);
       detectEvents(players, snapshot);
@@ -1321,6 +1459,7 @@
       paintTicker(snapshot.events);
       paintSlate(snapshot, players);
       paintAttract(players);
+      paintAttractStory();
       paintChips();
 
       el('roundId').textContent = snapshot.game_id
@@ -1331,6 +1470,7 @@
       el('meterHandoffs').textContent = (snapshot.reassignments || 0) + ' handoffs';
       el('start').disabled = snapshot.status === 'running';
       el('restart').disabled = snapshot.status === 'running';
+      schedulePostRoundIntermission(snapshot);
 
     }
 
@@ -1345,6 +1485,7 @@
       promoteSpotlight();
       refreshStateLines();
       paintChips();
+      paintAttractStory();
     }
 
     /* ---------- recovery: no curtain, the frozen board stays readable ---------- */
@@ -1374,6 +1515,7 @@
     }
 
     function beginRecovery(proof = currentProcessProof) {
+      closeTray();
       if (recoveryActive) {
         processLossObserved = true;
         setRecoveryStage(0);
@@ -1466,6 +1608,7 @@
     /* ---------- operator tray ---------- */
 
     function openTray() {
+      if (recoveryActive) return;
       el('stage').classList.add('tray-open');
       el('trayToggle').setAttribute('aria-expanded', 'true');
     }
@@ -1522,6 +1665,9 @@
           body: '{}'
         });
         if (!response.ok) throw new Error(await response.text());
+        intermissionMode = false;
+        postRoundGameId = null;
+        clearPostRoundTimer();
         render(await response.json());
       } catch (error) {
         showError(error.message);
@@ -1529,8 +1675,18 @@
       }
     }
 
+    function enterIntermission() {
+      clearPostRoundTimer();
+      intermissionMode = true;
+      attractStoryIndex = -1;
+      attractStoryStartedAt = Date.now();
+      closeTray();
+      render(state);
+      paintAttractStory(true);
+    }
+
     el('start').addEventListener('click', event => startRound(event.currentTarget));
-    el('restart').addEventListener('click', event => startRound(event.currentTarget));
+    el('restart').addEventListener('click', enterIntermission);
 
     document.querySelectorAll('[data-chaos]').forEach(button => {
       button.addEventListener('click', async () => {
@@ -1560,7 +1716,6 @@
         const proof = await proofResponse.json();
         const response = await fetch('/api/crash-worker', {method: 'POST'});
         if (!response.ok) throw new Error(await response.text());
-        closeTray();
         beginRecovery(proof);
       } catch (error) {
         showError(error.message);
@@ -1614,8 +1769,9 @@
         currentProcessProof = proof;
         connectEvents();
       })
-      .catch(() => {
+      .catch(error => {
         beginRecovery();
+        showError(error.message);
         connectEvents();
       });
     tick();

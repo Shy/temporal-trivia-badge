@@ -48,8 +48,8 @@ impl BadgeDisplay {
     pub fn show_waiting(&mut self, callsign: &str) -> Result<()> {
         self.show_centered_layout(
             callsign,
-            "WORKER READY",
-            "WAITING FOR GAME",
+            "POLLING TEMPORAL",
+            "NEXT QUESTION AUTO",
             &[
                 "ANSWER: PRESS DIRECTION",
                 "CRASH: HOLD LEFT+RIGHT",
