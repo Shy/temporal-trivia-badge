@@ -7,7 +7,11 @@ use std::{
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 pub const BADGE_TASK_QUEUE: &str = "temporal-trivia-badges-v1";
-pub const WEB_TASK_QUEUE: &str = "temporal-trivia-web-v1";
+// Workflow and Activity Workers share one logical Task Queue so Temporal UI's
+// Workflow Workers tab can show the Mac controller and physical badges
+// together. WorkerTaskTypes still prevents either process from accepting the
+// other's task type.
+pub const WEB_TASK_QUEUE: &str = BADGE_TASK_QUEUE;
 pub const GAME_SECONDS: u64 = 60;
 pub const CHAOS_DURATION_MS: u64 = 10_000;
 pub const GAME_EXTENSION_MS: u64 = 30_000;
@@ -193,12 +197,21 @@ pub enum ChaosCommand {
     ExtendThirtySeconds,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PowerupNotice {
+    pub sequence: u32,
+    pub command: ChaosCommand,
+    pub issued_unix_ms: u64,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChaosState {
     pub double_points_until_unix_ms: Option<u64>,
     pub rust_only_until_unix_ms: Option<u64>,
     pub sudden_death: bool,
     pub extension_used: bool,
+    #[serde(default)]
+    pub latest_powerup: Option<PowerupNotice>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -225,6 +238,8 @@ pub struct GameInput {
     pub questions: Vec<Question>,
     pub duration_seconds: u64,
     pub backlog_override: Option<usize>,
+    #[serde(default)]
+    pub detected_badge_count: Option<usize>,
     #[serde(default)]
     pub index_search_attributes: bool,
 }

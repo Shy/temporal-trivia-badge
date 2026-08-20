@@ -19,6 +19,7 @@ pub enum HapticEvent {
     Wrong,
     Crash,
     Recovered,
+    Powerup,
     Winner,
     RoundOver,
 }
@@ -85,7 +86,7 @@ impl BadgeHaptics {
                 self.pulse(FIRM_STRENGTH, Duration::from_millis(120))
                     .await?;
             }
-            HapticEvent::Recovered => {
+            HapticEvent::Recovered | HapticEvent::Powerup => {
                 self.pulse(ORIGINAL_STRENGTH, ORIGINAL_PULSE).await?;
                 self.gap().await;
                 self.pulse(ORIGINAL_STRENGTH, ORIGINAL_PULSE).await?;

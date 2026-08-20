@@ -6,7 +6,7 @@ use esp_idf_svc::hal::{
     units::KiloHertz,
 };
 
-use crate::model::{GameSnapshot, Question};
+use crate::model::{ChaosCommand, GameSnapshot, Question};
 
 const ADDRESS: u8 = 0x3c;
 const WIDTH: usize = 128;
@@ -56,6 +56,20 @@ impl BadgeDisplay {
                 "SLEEP: HOLD DOWN 3 SEC",
             ],
         )
+    }
+
+    pub fn show_powerup(&mut self, callsign: &str, command: ChaosCommand) -> Result<()> {
+        let (headline, detail, instruction) = match command {
+            ChaosCommand::DoublePoints => ("DOUBLE POINTS", "SCORES X2", "TEMPORAL UPDATE APPLIED"),
+            ChaosCommand::RustOnly => ("RUST ONLY", "10 SECOND FILTER", "TEMPORAL UPDATE APPLIED"),
+            ChaosCommand::SuddenDeath => {
+                ("SUDDEN DEATH", "NEXT RIGHT WINS", "TEMPORAL UPDATE APPLIED")
+            }
+            ChaosCommand::ExtendThirtySeconds => {
+                ("TIME EXTENDED", "+30 SECONDS", "DURABLE TIMER UPDATED")
+            }
+        };
+        self.show_centered_layout(callsign, headline, detail, &[instruction])
     }
 
     pub fn show_sleep_countdown(&mut self, callsign: &str, seconds: u64) -> Result<()> {

@@ -11,9 +11,10 @@
   the Activity while the original badge is still unavailable. The badge
   refuses that question for the rest of the game, allowing another Worker to
   recover it. Panic itself scores `0`.
-- The Workflow schedules each question at most once per game and maintains a
-  backlog of `max(10, active_badges * 2)`. Retrying unfinished work is not a
-  duplicate. The Mac UI may override the backlog target.
+- The controller counts active ESP32 Activity pollers when a round starts. The
+  Workflow keeps `max(1, active_badges - 1)` Activities outstanding, reserving
+  one badge to pick up heartbeat-timeout retries. Retrying unfinished work is
+  not a duplicate. The API may override the target for diagnostics.
 - The global deadline cancels outstanding Activities for zero points. There is
   no per-badge timer. Ties create shared winners.
 - Callsigns derive deterministically from the factory MAC and survive reboots.
@@ -36,7 +37,11 @@
 - Operator controls execute validated Workflow Updates for ten seconds of
   double points, ten seconds of Rust-only scheduling, sudden death on the next
   correct answer, and one `+30 seconds` timer extension. The three gameplay
-  modifiers are mutually exclusive; the timer extension is independent.
+  modifiers are mutually exclusive; the timer extension is independent. Each
+  Update also records a monotonically numbered power-up notice in Workflow
+  state. Awake badges query that durable state, vibrate, display it for 1.5
+  seconds, suppress answer input during the overlay, and restore their prior
+  question or waiting screen.
 - The supervised Mac controller may be deliberately crashed. The browser keeps
   the frozen board visible while `run-web.sh` restarts the Rust process and the
   Workflow Worker rebuilds game state from Temporal history. Recovery steps

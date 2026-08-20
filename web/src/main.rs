@@ -3,7 +3,7 @@ mod questions;
 mod workflow;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     convert::Infallible,
     path::{Path, PathBuf},
     str::FromStr,
@@ -25,21 +25,25 @@ use sha2::{Digest, Sha256};
 use temporalio_client::{
     Client, ClientOptions, Connection, ConnectionOptions, NamespacedClient, TlsOptions,
     WorkflowDescribeOptions, WorkflowExecuteUpdateOptions, WorkflowExecution, WorkflowHandle,
-    WorkflowListOptions, WorkflowQueryOptions, WorkflowStartOptions,
+    WorkflowListOptions, WorkflowQueryOptions, WorkflowStartOptions, tonic::Request,
 };
 use temporalio_common::protos::temporal::api::enums::v1::{
-    WorkflowIdConflictPolicy, WorkflowIdReusePolicy,
+    TaskQueueType, WorkflowIdConflictPolicy, WorkflowIdReusePolicy,
 };
-use temporalio_common::{telemetry::TelemetryOptions, worker::WorkerTaskTypes};
-use temporalio_sdk::{Worker, WorkerOptions};
-use temporalio_sdk_core::{CoreRuntime, RuntimeOptions, Url};
+use temporalio_common::protos::temporal::api::{
+    taskqueue::v1::TaskQueue, workflowservice::v1::DescribeTaskQueueRequest,
+};
+use temporalio_common::telemetry::TelemetryOptions;
+use temporalio_sdk::{Runtime, Worker, WorkerOptions, runtime::RuntimeOptions};
+use temporalio_sdk_core::Url;
 use tokio::sync::{Mutex, RwLock, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::{
     model::{
-        ChaosCommand, GAME_SECONDS, GameInput, GameSnapshot, GameStatus, RoundMemo, WEB_TASK_QUEUE,
+        BADGE_TASK_QUEUE, ChaosCommand, GAME_SECONDS, GameInput, GameSnapshot, GameStatus,
+        RoundMemo, WEB_TASK_QUEUE,
     },
     workflow::{GameWorkflow, GameWorkflowRun},
 };
@@ -61,6 +65,7 @@ const WORKFLOW_MAX_ERROR_BACKOFF: Duration = Duration::from_secs(4);
 const MAX_BACKLOG_OVERRIDE: usize = 100;
 const ROUND_HISTORY_LIMIT: usize = 12;
 const ROUND_HISTORY_SCAN_LIMIT: usize = 100;
+const ACTIVE_BADGE_POLLER_MAX_AGE: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 struct AppState {
@@ -122,7 +127,7 @@ impl IntoResponse for ApiError {
 #[tokio::main]
 async fn main() -> Result<()> {
     let client = connect_cloud().await?;
-    let runtime = CoreRuntime::new_assume_tokio(
+    let runtime = Runtime::new_assume_tokio(
         RuntimeOptions::builder()
             .telemetry_options(TelemetryOptions::builder().build())
             .build()
@@ -130,7 +135,6 @@ async fn main() -> Result<()> {
     )?;
     let worker_options = WorkerOptions::new(WEB_TASK_QUEUE)
         .register_workflow::<GameWorkflow>()?
-        .task_types(WorkerTaskTypes::workflow_only())
         // The SDK's detector treats FuturesUnordered's forwarding wakers as
         // external even when every contained future is an SDK Activity/timer.
         // Core's own FuturesUnordered test uses this same opt-out.
@@ -175,7 +179,13 @@ async fn main() -> Result<()> {
             .await
             .map_err(|error| anyhow!(error))
     };
-    tokio::try_join!(worker.run(), server)?;
+    let worker_run = async move {
+        worker
+            .run()
+            .await
+            .map_err(|error| anyhow!(error.to_string()))
+    };
+    tokio::try_join!(worker_run, server)?;
     Ok(())
 }
 
@@ -283,6 +293,19 @@ async fn start_game(
             format!("backlog override must be between 1 and {MAX_BACKLOG_OVERRIDE}"),
         ));
     }
+    let detected_badge_count = active_badge_count(&state.client)
+        .await
+        .map_err(|error| ApiError(StatusCode::BAD_GATEWAY, error.to_string()))?;
+    if detected_badge_count == 0 {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "no active badge Workers detected; power on a badge and wait for its Worker screen"
+                .to_owned(),
+        ));
+    }
+    let target_backlog = request
+        .backlog_override
+        .unwrap_or_else(|| recovery_capacity(detected_badge_count));
     let deck = questions::build_deck(rand::random(), 500)
         .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     let game_id = format!("trivia-{}", Uuid::new_v4().simple());
@@ -303,7 +326,8 @@ async fn start_game(
         game_id: game_id.clone(),
         questions: deck,
         duration_seconds: GAME_SECONDS,
-        backlog_override: request.backlog_override,
+        backlog_override: Some(target_backlog),
+        detected_badge_count: Some(detected_badge_count),
         index_search_attributes: std::env::var("TRIVIA_SEARCH_ATTRIBUTES").as_deref() == Ok("1"),
     };
     let handle_result = state
@@ -336,6 +360,51 @@ async fn start_game(
     publish(&state, starting.clone()).await;
     tokio::spawn(observe_workflow(state.clone(), handle, game_id));
     Ok(Json(starting))
+}
+
+async fn active_badge_count(client: &Client) -> Result<usize> {
+    let request = DescribeTaskQueueRequest {
+        namespace: client.namespace(),
+        task_queue: Some(TaskQueue {
+            name: BADGE_TASK_QUEUE.to_owned(),
+            ..Default::default()
+        }),
+        task_queue_type: TaskQueueType::Activity as i32,
+        ..Default::default()
+    };
+    let pollers = client
+        .connection()
+        .workflow_service()
+        .describe_task_queue(Request::new(request))
+        .await
+        .context("describe badge Activity Task Queue")?
+        .into_inner()
+        .pollers;
+    let now_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let oldest_active_seconds = now_seconds - ACTIVE_BADGE_POLLER_MAX_AGE.as_secs() as i64;
+    Ok(pollers
+        .into_iter()
+        .filter(|poller| is_badge_worker_identity(&poller.identity))
+        .filter(|poller| {
+            poller
+                .last_access_time
+                .as_ref()
+                .is_some_and(|last_access| last_access.seconds >= oldest_active_seconds)
+        })
+        .map(|poller| poller.identity)
+        .collect::<HashSet<_>>()
+        .len())
+}
+
+fn recovery_capacity(badge_count: usize) -> usize {
+    badge_count.saturating_sub(1).max(1)
+}
+
+fn is_badge_worker_identity(identity: &str) -> bool {
+    identity.starts_with("badge/") || identity.starts_with("esp32-")
 }
 
 async fn apply_chaos(
@@ -425,8 +494,7 @@ async fn round_history(State(state): State<AppState>) -> Result<Json<Vec<RoundSu
 }
 
 fn round_summary(execution: &WorkflowExecution) -> Option<RoundSummary> {
-    let payload = execution.memo()?.fields.get("TriviaRoundSummary")?;
-    let memo: RoundMemo = serde_json::from_slice(&payload.data).ok()?;
+    let memo: RoundMemo = execution.memo().get("TriviaRoundSummary").ok()??;
     Some(RoundSummary {
         game_id: memo.game_id,
         run_id: execution.run_id().to_owned(),
@@ -623,5 +691,20 @@ mod tests {
             snapshot_digest(&changed),
             snapshot_digest(&GameSnapshot::default())
         );
+    }
+
+    #[test]
+    fn recovery_capacity_reserves_one_badge_when_possible() {
+        assert_eq!(recovery_capacity(0), 1);
+        assert_eq!(recovery_capacity(1), 1);
+        assert_eq!(recovery_capacity(2), 1);
+        assert_eq!(recovery_capacity(10), 9);
+    }
+
+    #[test]
+    fn badge_worker_identity_accepts_named_and_legacy_badges_only() {
+        assert!(is_badge_worker_identity("badge/KEEN-RAVEN-C8"));
+        assert!(is_badge_worker_identity("esp32-e83dc1f94bc8"));
+        assert!(!is_badge_worker_identity("63305@Fatehowler.local"));
     }
 }

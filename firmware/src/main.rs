@@ -34,16 +34,15 @@ use temporalio_client::{
     Client, ClientOptions, Connection, ConnectionOptions, TlsOptions, WorkflowQueryOptions,
     WorkflowSignalOptions,
 };
-use temporalio_common::worker::{WorkerDeploymentOptions, WorkerTaskTypes};
+use temporalio_common::worker::WorkerDeploymentOptions;
 use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::{
-    SyncWorkflowContext, Worker, WorkerOptions, WorkflowContext, WorkflowContextView,
+    Runtime, SyncWorkflowContext, Worker, WorkerOptions, WorkflowContext, WorkflowContextView,
     WorkflowResult,
     activities::{ActivityContext, ActivityError},
+    runtime::RuntimeOptions,
 };
-use temporalio_sdk_core::{
-    ActivitySlotKind, CoreRuntime, FixedSizeSlotSupplier, RuntimeOptions, TunerBuilder, Url,
-};
+use temporalio_sdk_core::{ActivitySlotKind, FixedSizeSlotSupplier, TunerBuilder, Url};
 
 use crate::{
     display::BadgeDisplay,
@@ -57,10 +56,15 @@ use crate::{
 include!(concat!(env!("OUT_DIR"), "/firmware_config.rs"));
 const PANIC_HOLD: Duration = Duration::from_millis(500);
 const HEARTBEAT_BLACKOUT: Duration = Duration::from_secs(6);
+const WORKER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const MAX_ACTIVITY_RUNTIME: Duration = Duration::from_secs(120);
+const POWERUP_OVERLAY: Duration = Duration::from_millis(1_500);
+const POWERUP_FRESHNESS_MS: u64 = 5_000;
+const ACTIVE_WORKFLOW_ID: &str = "temporal-trivia-active";
 
 type SharedDisplay = Arc<Mutex<BadgeDisplay>>;
 type SharedInput = Arc<Mutex<BadgeInput>>;
+type SharedQuestion = Arc<Mutex<Option<QuestionTask>>>;
 
 #[workflow]
 #[derive(Default)]
@@ -91,6 +95,8 @@ impl GameWorkflow {
     }
 }
 
+type GameWorkflowRun = <GameWorkflow as temporalio_common::HasWorkflowDefinition>::Run;
+
 struct BadgeActivities {
     display: SharedDisplay,
     haptics: SharedHaptics,
@@ -99,6 +105,8 @@ struct BadgeActivities {
     session: Arc<SessionStore>,
     result_watcher: Mutex<Option<ResultWatcher>>,
     activity_active: Arc<AtomicBool>,
+    powerup_active: Arc<AtomicBool>,
+    current_question: SharedQuestion,
 }
 
 struct ResultWatcher {
@@ -108,6 +116,10 @@ struct ResultWatcher {
 
 struct ActivityActiveGuard(Arc<AtomicBool>);
 
+struct CurrentQuestionGuard(SharedQuestion);
+
+struct PowerupActiveGuard(Arc<AtomicBool>);
+
 impl ActivityActiveGuard {
     fn new(active: Arc<AtomicBool>) -> Self {
         active.store(true, Ordering::Release);
@@ -116,6 +128,36 @@ impl ActivityActiveGuard {
 }
 
 impl Drop for ActivityActiveGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+impl CurrentQuestionGuard {
+    fn new(current: SharedQuestion, task: QuestionTask) -> Result<Self, ActivityError> {
+        *current
+            .lock()
+            .map_err(|_| anyhow!("question lock poisoned"))? = Some(task);
+        Ok(Self(current))
+    }
+}
+
+impl Drop for CurrentQuestionGuard {
+    fn drop(&mut self) {
+        if let Ok(mut current) = self.0.lock() {
+            *current = None;
+        }
+    }
+}
+
+impl PowerupActiveGuard {
+    fn new(active: Arc<AtomicBool>) -> Self {
+        active.store(true, Ordering::Release);
+        Self(active)
+    }
+}
+
+impl Drop for PowerupActiveGuard {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
@@ -136,6 +178,7 @@ impl BadgeActivities {
         task: QuestionTask,
     ) -> Result<BadgeAnswer, ActivityError> {
         let _active = ActivityActiveGuard::new(Arc::clone(&self.activity_active));
+        let _current = CurrentQuestionGuard::new(Arc::clone(&self.current_question), task.clone())?;
         self.session
             .begin_game(&task.game_id, task.deadline_unix_ms)?;
         self.start_result_watcher(&ctx, &task)?;
@@ -268,6 +311,7 @@ impl BadgeActivities {
         let mut right_armed = false;
         let mut combo_started: Option<Instant> = None;
         let mut last_heartbeat = Instant::now();
+        let mut suppress_until_release = false;
         loop {
             if ctx.is_cancelled()
                 || unix_ms() >= deadline_unix_ms
@@ -276,10 +320,27 @@ impl BadgeActivities {
                 return Err(ActivityError::cancelled());
             }
             if last_heartbeat.elapsed() >= Duration::from_secs(1) {
-                ctx.record_heartbeat(Vec::new());
+                if let Err(error) = ctx.record_heartbeat(()).await {
+                    log::warn!("could not encode Activity heartbeat: {error}");
+                }
                 last_heartbeat = Instant::now();
             }
             let buttons = self.sample_buttons()?;
+            if self.powerup_active.load(Ordering::Acquire) {
+                suppress_until_release = true;
+                left_armed = false;
+                right_armed = false;
+                combo_started = None;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                continue;
+            }
+            if suppress_until_release {
+                if !buttons.any() {
+                    suppress_until_release = false;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                continue;
+            }
             if buttons.left && buttons.right {
                 let started = combo_started.get_or_insert_with(Instant::now);
                 if started.elapsed() >= PANIC_HOLD {
@@ -455,9 +516,10 @@ async fn run_worker(
     session: Arc<SessionStore>,
 ) -> Result<()> {
     let runtime_options = RuntimeOptions::builder()
+        .heartbeat_interval(Some(WORKER_HEARTBEAT_INTERVAL))
         .build()
         .map_err(|error| anyhow!(error))?;
-    let core = CoreRuntime::new_assume_tokio(runtime_options)?;
+    let sdk_runtime = Runtime::new_assume_tokio(runtime_options)?;
     let target = if TEMPORAL_ADDRESS.contains("://") {
         TEMPORAL_ADDRESS.to_owned()
     } else {
@@ -470,10 +532,7 @@ async fn run_worker(
         .map_err(|error| anyhow!("build WebPKI verifier: {error}"))?;
     let options = ConnectionOptions::new(Url::from_str(&target)?)
         .api_key(TEMPORAL_API_KEY)
-        .tls_options(TlsOptions {
-            server_cert_verifier: Some(verifier),
-            ..Default::default()
-        })
+        .tls_options(TlsOptions::builder().server_cert_verifier(verifier).build())
         .build();
     let connection = Connection::connect(options).await?;
     let client = Client::new(connection, ClientOptions::new(TEMPORAL_NAMESPACE).build())?;
@@ -482,9 +541,11 @@ async fn run_worker(
     let mut tuner = TunerBuilder::default();
     tuner.activity_slot_supplier(Arc::new(FixedSizeSlotSupplier::<ActivitySlotKind>::new(1)));
     let activity_active = Arc::new(AtomicBool::new(false));
+    let powerup_active = Arc::new(AtomicBool::new(false));
+    let current_question = Arc::new(Mutex::new(None));
+    let worker_identity = format!("badge/{}", identity.callsign);
     let worker_options = WorkerOptions::new(BADGE_TASK_QUEUE)
-        .client_identity_override(identity.id.clone())
-        .task_types(WorkerTaskTypes::activity_only())
+        .client_identity_override(worker_identity.clone())
         .tuner(Arc::new(tuner.build()))
         .deployment_options(WorkerDeploymentOptions::from_build_id(
             "temporal-trivia-badge-0.1.0".to_owned(),
@@ -497,21 +558,40 @@ async fn run_worker(
             session,
             result_watcher: Mutex::new(None),
             activity_active: Arc::clone(&activity_active),
+            powerup_active: Arc::clone(&powerup_active),
+            current_question: Arc::clone(&current_question),
         })
         .build();
-    let mut worker =
-        Worker::new(&core, client, worker_options).map_err(|error| anyhow!(error.to_string()))?;
+    let powerup_client = client.clone();
+    let mut worker = Worker::new(&sdk_runtime, client, worker_options)
+        .map_err(|error| anyhow!(error.to_string()))?;
     show_waiting(&display, &identity.callsign)?;
     let sleep_display = Arc::clone(&display);
     let sleep_input = Arc::clone(&input);
     let sleep_haptics = Arc::clone(&haptics);
     let sleep_callsign = identity.callsign.clone();
+    let powerup_display = Arc::clone(&display);
+    let powerup_haptics = Arc::clone(&haptics);
+    let powerup_callsign = identity.callsign.clone();
+    let powerup_flag = Arc::clone(&powerup_active);
+    tokio::spawn(async move {
+        monitor_powerups(
+            powerup_client,
+            powerup_display,
+            powerup_haptics,
+            powerup_callsign,
+            current_question,
+            powerup_flag,
+        )
+        .await;
+    });
     tokio::spawn(async move {
         if let Err(error) = power::monitor(
             sleep_display,
             sleep_input,
             sleep_haptics,
             activity_active,
+            powerup_active,
             sleep_callsign,
         )
         .await
@@ -519,9 +599,67 @@ async fn run_worker(
             log::error!("sleep monitor stopped: {error:#}");
         }
     });
-    log::info!("Polling trivia queue {BADGE_TASK_QUEUE} as {}", identity.id);
+    log::info!("Polling trivia queue {BADGE_TASK_QUEUE} as {worker_identity}");
     worker.run().await?;
     Ok(())
+}
+
+async fn monitor_powerups(
+    client: Client,
+    display: SharedDisplay,
+    haptics: SharedHaptics,
+    callsign: String,
+    current_question: SharedQuestion,
+    powerup_active: Arc<AtomicBool>,
+) {
+    let handle = client.get_workflow_handle::<GameWorkflowRun>(ACTIVE_WORKFLOW_ID);
+    let mut game_id = None;
+    let mut sequence = 0;
+    loop {
+        if let Ok(snapshot) = handle
+            .query(GameWorkflow::snapshot, (), WorkflowQueryOptions::default())
+            .await
+        {
+            if snapshot.game_id != game_id {
+                game_id.clone_from(&snapshot.game_id);
+                sequence = 0;
+            }
+            if let Some(notice) = snapshot.chaos.latest_powerup
+                && notice.sequence > sequence
+            {
+                sequence = notice.sequence;
+                if snapshot.status == model::GameStatus::Running
+                    && unix_ms().saturating_sub(notice.issued_unix_ms) <= POWERUP_FRESHNESS_MS
+                {
+                    let _overlay = PowerupActiveGuard::new(Arc::clone(&powerup_active));
+                    if let Ok(mut screen) = display.lock() {
+                        match screen.show_powerup(&callsign, notice.command) {
+                            Ok(()) => log::info!(
+                                "Displayed Temporal power-up {:?} sequence {}",
+                                notice.command,
+                                notice.sequence
+                            ),
+                            Err(error) => log::error!("show power-up: {error:#}"),
+                        }
+                    }
+                    haptics::play(&haptics, HapticEvent::Powerup).await;
+                    tokio::time::sleep(POWERUP_OVERLAY).await;
+                    let question = current_question.lock().ok().and_then(|task| task.clone());
+                    if let Ok(mut screen) = display.lock() {
+                        let result = if let Some(task) = question {
+                            screen.show_question(&callsign, &task.question)
+                        } else {
+                            screen.show_waiting(&callsign)
+                        };
+                        if let Err(error) = result {
+                            log::error!("restore screen after power-up: {error:#}");
+                        }
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 }
 
 fn unix_ms() -> u64 {

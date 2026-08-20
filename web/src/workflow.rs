@@ -4,18 +4,18 @@ use std::{
 };
 
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
-use temporalio_common::protos::coresdk::AsJsonPayloadExt;
 use temporalio_common::protos::temporal::api::common::v1::RetryPolicy;
+use temporalio_common::search_attributes::SearchAttributeKey;
 use temporalio_macros::{activity_definitions, workflow, workflow_methods};
 use temporalio_sdk::{
-    ActivityOptions, SyncWorkflowContext, WorkflowContext, WorkflowContextView, WorkflowResult,
-    activities::ActivityError,
+    ActivityOptions, MemoValue, SyncWorkflowContext, WorkflowContext, WorkflowContextView,
+    WorkflowResult, activities::ActivityError,
 };
 
 use crate::model::{
     AnswerSpotlight, BADGE_TASK_QUEUE, BadgeAnswer, BadgeEvent, BadgeFailure, CHAOS_DURATION_MS,
-    ChaosCommand, GAME_EXTENSION_MS, GameInput, GameSnapshot, GameStatus, PlayerScore, Question,
-    QuestionTask, Reassignment, RoundMemo,
+    ChaosCommand, GAME_EXTENSION_MS, GameInput, GameSnapshot, GameStatus, PlayerScore,
+    PowerupNotice, Question, QuestionTask, Reassignment, RoundMemo,
 };
 
 pub struct BadgeActivities;
@@ -69,6 +69,20 @@ impl GameWorkflow {
                 ..Default::default()
             };
             state.snapshot.push_event("Round started".to_owned());
+            if let Some(badge_count) = input.detected_badge_count {
+                let active_slots = input
+                    .backlog_override
+                    .unwrap_or_else(|| badge_count.saturating_sub(1).max(1));
+                if badge_count > 1 {
+                    state.snapshot.push_event(format!(
+                        "{badge_count} badges ready · {active_slots} playing · 1 recovery reserve"
+                    ));
+                } else {
+                    state
+                        .snapshot
+                        .push_event("1 badge ready · no recovery reserve".to_owned());
+                }
+            }
         });
         if input.index_search_attributes {
             upsert_running_search_attributes(ctx);
@@ -118,7 +132,7 @@ impl GameWorkflow {
                 pending.push(
                     async move {
                         let result = activity_ctx
-                            .start_activity(
+                            .execute_activity(
                                 BadgeActivities::answer_question,
                                 task,
                                 ActivityOptions::with_schedule_to_close_timeout(activity_timeout)
@@ -193,10 +207,9 @@ impl GameWorkflow {
         let round_memo = ctx.state(|state| RoundMemo::from(&state.snapshot));
         ctx.upsert_memo([(
             "TriviaRoundSummary".to_owned(),
-            round_memo
-                .as_json_payload()
-                .expect("round summary memo payload"),
-        )]);
+            Some(MemoValue::new(round_memo)),
+        )])
+        .expect("round summary memo update");
         if input.index_search_attributes {
             upsert_finished_search_attributes(ctx);
         }
@@ -255,18 +268,10 @@ impl GameWorkflow {
         }
         if self.index_search_attributes {
             ctx.upsert_search_attributes([
-                (
-                    "TriviaBadgeCount".to_owned(),
-                    (self.snapshot.players.len() as i64)
-                        .as_json_payload()
-                        .expect("badge count payload"),
-                ),
-                (
-                    "TriviaReassignments".to_owned(),
-                    (self.snapshot.reassignments as i64)
-                        .as_json_payload()
-                        .expect("reassignment payload"),
-                ),
+                SearchAttributeKey::int("TriviaBadgeCount")
+                    .value_set(self.snapshot.players.len() as i64),
+                SearchAttributeKey::int("TriviaReassignments")
+                    .value_set(self.snapshot.reassignments as i64),
             ]);
         }
     }
@@ -360,6 +365,17 @@ impl GameWorkflow {
                     .push_event("CHAOS: Temporal timer extended by 30 seconds".to_owned());
             }
         }
+        let sequence = self
+            .snapshot
+            .chaos
+            .latest_powerup
+            .as_ref()
+            .map_or(1, |notice| notice.sequence.saturating_add(1));
+        self.snapshot.chaos.latest_powerup = Some(PowerupNotice {
+            sequence,
+            command,
+            issued_unix_ms: now_unix_ms,
+        });
         self.snapshot.clone()
     }
 
@@ -485,62 +501,21 @@ fn workflow_unix_ms(ctx: &WorkflowContext<GameWorkflow>) -> u64 {
 
 fn upsert_running_search_attributes(ctx: &WorkflowContext<GameWorkflow>) {
     ctx.upsert_search_attributes([
-        (
-            "TriviaGameStatus".to_owned(),
-            "Running"
-                .to_owned()
-                .as_json_payload()
-                .expect("status payload"),
-        ),
-        (
-            "TriviaBadgeCount".to_owned(),
-            0_i64.as_json_payload().expect("badge count payload"),
-        ),
-        (
-            "TriviaReassignments".to_owned(),
-            0_i64.as_json_payload().expect("reassignment payload"),
-        ),
-        (
-            "TriviaWinner".to_owned(),
-            "".to_owned().as_json_payload().expect("winner payload"),
-        ),
-        (
-            "TriviaRustSdk".to_owned(),
-            true.as_json_payload().expect("Rust SDK payload"),
-        ),
+        SearchAttributeKey::keyword("TriviaGameStatus").value_set("Running".to_owned()),
+        SearchAttributeKey::int("TriviaBadgeCount").value_set(0),
+        SearchAttributeKey::int("TriviaReassignments").value_set(0),
+        SearchAttributeKey::keyword("TriviaWinner").value_set(String::new()),
+        SearchAttributeKey::bool("TriviaRustSdk").value_set(true),
     ]);
 }
 
 fn upsert_finished_search_attributes(ctx: &WorkflowContext<GameWorkflow>) {
     let snapshot = ctx.state(|state| state.snapshot.clone());
     ctx.upsert_search_attributes([
-        (
-            "TriviaGameStatus".to_owned(),
-            "Finished"
-                .to_owned()
-                .as_json_payload()
-                .expect("status payload"),
-        ),
-        (
-            "TriviaWinner".to_owned(),
-            snapshot
-                .winners
-                .join(" + ")
-                .as_json_payload()
-                .expect("winner payload"),
-        ),
-        (
-            "TriviaBadgeCount".to_owned(),
-            (snapshot.players.len() as i64)
-                .as_json_payload()
-                .expect("badge count payload"),
-        ),
-        (
-            "TriviaReassignments".to_owned(),
-            (snapshot.reassignments as i64)
-                .as_json_payload()
-                .expect("reassignment payload"),
-        ),
+        SearchAttributeKey::keyword("TriviaGameStatus").value_set("Finished".to_owned()),
+        SearchAttributeKey::keyword("TriviaWinner").value_set(snapshot.winners.join(" + ")),
+        SearchAttributeKey::int("TriviaBadgeCount").value_set(snapshot.players.len() as i64),
+        SearchAttributeKey::int("TriviaReassignments").value_set(snapshot.reassignments as i64),
     ]);
 }
 

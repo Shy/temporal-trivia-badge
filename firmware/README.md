@@ -6,7 +6,12 @@ generic ESP32-S3 firmware project. It depends on that badge's 16 MiB flash,
 8 MiB PSRAM, OLED, directional buttons, and GPIO mapping.
 
 The Worker renders questions, reads answers, heartbeats while a player decides,
-and stores its stable badge/session state in NVS.
+stores its stable badge/session state in NVS, and runs Temporal Rust SDK `0.7.0`.
+
+Each badge also sends Temporal Worker heartbeats every 10 seconds and registers
+with a readable `badge/CALLSIGN` Worker identity. In Temporal Cloud, filter the
+Workers page by Task Queue `temporal-trivia-badges-v1` to see the physical Rust
+Activity Workers and their live slot and poller telemetry.
 
 Run the commands below from the repository root.
 
@@ -110,6 +115,9 @@ running. Set `ESPFLASH` to an executable path to override the flashing tool.
   the unfinished question available to another Worker.
 - A wrong answer applies the score penalty and completes the Activity normally.
   Only a simulated Worker failure returns the question to the Task Queue.
+- A web power-up causes each awake badge to vibrate and show a 1.5-second
+  overlay from the durable Workflow state. The badge restores its question or
+  waiting screen afterward and ignores answer input while the overlay is up.
 - While waiting for work, hold **DOWN** for three seconds to sleep. Release it
   after `SLEEPING`, then press any face button to wake. Sleep is disabled while
   an Activity owns the controls.

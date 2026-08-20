@@ -5,6 +5,11 @@ server, trivia deck, and fixed 16:9 scoreboard. The controller starts rounds,
 schedules question Activities for Replay 2026 badges, observes durable game
 state, and serves the operator UI at `127.0.0.1:3000`.
 
+The controller polls Workflow Tasks on the same
+`temporal-trivia-badges-v1` Task Queue used by badge Activity Workers. Each
+Worker enables only its own task type, and Temporal UI can show the Mac and
+physical badges together on the Workflow's **Workers** tab.
+
 Run the commands below from the repository root.
 
 ## Requirements
@@ -44,7 +49,11 @@ digest matching the frozen board.
 ## Run a game
 
 Click **START ROUND** after badges are polling. Only one round can run at a
-time, and badges that begin polling during an active round join automatically.
+time. The controller counts active ESP32 Activity pollers and keeps one badge
+free as recovery capacity, so two badges run one Activity at a time and ten
+badges run nine. A single-badge game still runs one Activity. Badges that begin
+polling during an active round can claim later work, but the recovery capacity
+is fixed from the roster detected at round start.
 
 Open the operator tray with the small **TP7** test pad in the bottom-right
 corner or the `O` keyboard shortcut. It rises from the bottom edge and the

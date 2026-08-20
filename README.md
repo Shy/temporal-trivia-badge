@@ -4,6 +4,7 @@ Durable Trivia is a 60-second competitive game where Temporal Replay 2026
 badges are real Rust Temporal Activity Workers. A Rust/Axum controller runs the
 Workflow Worker and a 16:9 scoreboard on a laptop; Temporal Cloud coordinates
 questions, retries unfinished work, and preserves the round through crashes.
+Both the controller and badge firmware currently pin Temporal Rust SDK `0.7.0`.
 
 ## Start here
 
@@ -25,10 +26,19 @@ both running for a physical game.
 - `shared/` contains the serialized game contract used by both Workers so their
   Temporal payloads cannot drift independently.
 
+The Mac Workflow Worker and badge Activity Workers use the same logical Task
+Queue, `temporal-trivia-badges-v1`, while polling only their respective task
+types. This makes every process visible together in a Workflow's **Workers**
+tab without allowing the Mac to answer trivia or a badge to execute Workflows.
+
 Temporal Cloud is the durable system of record. The laptop may restart and
 badges may disconnect without resetting the active Workflow. Activities
 abandoned by a failed Worker return to the Task Queue for another badge. Wrong
 answers are successful Activity results and do not retry.
+
+Operator power-ups are durable Workflow Updates. Every awake badge queries the
+Workflow state, displays a short power-up overlay, and then restores its active
+question or waiting screen; answer input is suppressed while the overlay is up.
 
 ## Shared requirements
 

@@ -44,13 +44,14 @@ pub async fn monitor(
     input: Arc<Mutex<BadgeInput>>,
     haptics: SharedHaptics,
     activity_active: Arc<AtomicBool>,
+    powerup_active: Arc<AtomicBool>,
     callsign: String,
 ) -> Result<()> {
     let mut down_since: Option<Instant> = None;
     let mut shown_second: Option<u64> = None;
 
     loop {
-        if activity_active.load(Ordering::Acquire) {
+        if activity_active.load(Ordering::Acquire) || powerup_active.load(Ordering::Acquire) {
             down_since = None;
             shown_second = None;
             tokio::time::sleep(POLL_INTERVAL).await;

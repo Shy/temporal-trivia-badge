@@ -514,3 +514,72 @@
   running the release firmware against the live Rust controller and Temporal
   Cloud. This closes the physical gameplay acceptance gate; the user approved
   publishing the resulting game changes to GitHub.
+
+## 2026-08-20 — Reserve capacity for visible handoffs
+
+- A two-badge round with the default ten-Activity backlog did not visibly hand
+  off a crashed question. Both Workers already held Activities and eight fresh
+  questions were queued ahead of the retry, so the crash alone could not
+  produce a reassignment before another Worker claimed the retried attempt.
+- Temporal Cloud's Activity Task Queue description returned the two live badge
+  identities, `esp32-e83dc1f94bc8` and `esp32-e83dc1f94c70`, with recent poll
+  timestamps. The controller now uses that server-side poller list at round
+  start and schedules `max(1, badge_count - 1)` Activities, reserving one badge
+  for heartbeat-timeout recovery. Explicit API backlog overrides remain for
+  diagnostics.
+
+## 2026-08-20 — Make physical badges explicit in Temporal Workers
+
+- `temporal worker list` proved both badges were already registered as real
+  Rust SDK Workers with `WORKER_STATUS_RUNNING`, Activity slot telemetry, and
+  the shared Task Queue. Their identities were opaque MAC-derived `esp32-*`
+  strings and the default heartbeat arrived every 60 seconds, making them easy
+  to miss or mistake for stale Workers in the Temporal UI.
+- Firmware now registers the Worker as `badge/CALLSIGN` while retaining the
+  MAC-derived ID in game payloads and NVS. Worker heartbeat cadence is 10
+  seconds so live physical devices remain visibly fresh. The controller's
+  badge-count query accepts both the new identity and the old identity during
+  rolling reflashes.
+- The Workflow-detail Workers tab in Temporal UI is scoped to the Workflow's
+  Task Queue. The Mac used `temporal-trivia-web-v1` while badges used
+  `temporal-trivia-badges-v1`, so that screen correctly showed only Mac
+  processes even though the Workers API contained both badges. The controller
+  now polls Workflow Tasks on the badge Task Queue; task-type restrictions
+  still keep Workflow execution on the Mac and Activity execution on badges,
+  while future Workflow runs can show all three kinds of evidence together.
+
+## 2026-08-20 — Rust SDK 0.7.0 and durable badge power-ups
+
+- The live crates.io registry reported `temporalio-sdk 0.7.0`; the project was
+  still pinned to `0.5.0`, and the indexed official quickstart and release page
+  still showed `0.5.0`. Upgraded all Temporal Rust crates together to `0.7.0`
+  and carried the existing ESP-IDF hostname, portable-atomic, and Tokio feature
+  patches into freshly vendored `0.7.0` sources.
+- SDK 0.7 changed Worker construction to require the high-level `Runtime`,
+  removed explicit Worker task-type selection, made Activity heartbeats typed
+  and async, made TLS options non-exhaustive, and introduced typed Memo and
+  Search Attribute updates. The controller and firmware now use those APIs.
+- The first ESP32 build reached an Xtensa LLVM backend crash in the new client
+  JSON-history helper: `Cannot select ... [2 x float] [float -1.0, float
+  1.0]` while compiling Serde's `ContentRefDeserializer::deserialize_float`.
+  Badges never import Workflow history JSON, so the vendored client excludes
+  only `WorkflowHistory::from_json` on ESP-IDF. Host builds retain the API.
+- Power-up clicks remain validated Workflow Updates and now write a monotonic
+  `PowerupNotice` into durable Workflow state. Each awake badge queries that
+  state directly through Temporal, vibrates, displays a 1.5-second OLED
+  overlay, suppresses answer input, and restores the question or idle screen.
+- Host verification passed 19/19 tests and strict warnings-as-errors Clippy.
+  The ESP32 release build passed and produced an 8,370,384-byte app using
+  57.02% of the 14,680,064-byte factory partition. Both physical badges were
+  flashed and Temporal Cloud reported `badge/KEEN-RAVEN-C8` and
+  `badge/KEEN-SEAL-70` as running `temporal-rust 0.7.0` Workers with one
+  Activity slot each. The Mac Workflow Worker appeared on the same Task Queue
+  with SDK `0.7.0`.
+- In a live round, a Rust-only Workflow Update wrote power-up sequence 1 and
+  Raven logged `Displayed Temporal power-up RustOnly sequence 1` only after the
+  OLED write succeeded. Seal runs the identical image; its serial monitor was
+  silent during this check, so its individual overlay was not independently
+  observed.
+- A final offline ESP32 release build passed without warnings after cfg-gating
+  the SDK's desktop-only environment detector. The resulting ELF SHA-256 is
+  `0ff514959c6f800659fa5ed3429ce9e6afad99006599aeee3c21536d6160fbba`.
