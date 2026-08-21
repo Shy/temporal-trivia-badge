@@ -43,6 +43,33 @@
       --floor: 2.2cqh;
       --ease: cubic-bezier(.22, .8, .28, 1);
     }
+    /* Rail typography and rhythm live in tokens so wide mode is one override
+       block instead of a per-element twin for every rail element. */
+    .stage {
+      --size-question: 3.1cqh;
+      --size-answer: 2.7cqh;
+      --size-who: 2.4cqh;
+      --size-points: 4.2cqh;
+      --size-winner: 5.6cqh;
+      --size-stat: 3.6cqh;
+      --clamp-question: 4;
+      --clamp-tick: 2;
+      --q-leading: 1.25;
+      --label-gap: 1.1cqh;
+      --rail-gap: 1.2cqh;
+    }
+    .stage.wide {
+      --size-question: 2.4cqh;
+      --size-answer: 2.2cqh;
+      --size-who: 2cqh;
+      --size-points: 3.2cqh;
+      --size-winner: 4.5cqh;
+      --clamp-question: 2;
+      --clamp-tick: 1;
+      --q-leading: 1.18;
+      --label-gap: .6cqh;
+      --rail-gap: .7cqh;
+    }
     * { box-sizing: border-box; }
     html, body {
       width: 100%;
@@ -68,9 +95,6 @@
       .roster-chip, .start, .restart, .tp, .tab, .tray-note, .tray-close,
       .control small, .round strong, .round time, .round small, .toast
     ) { font-family: var(--font-mono); }
-    :is(.start, .restart, .tp, .tab, .tray-close) {
-      font-family: var(--font-mono);
-    }
     :where(
       .brand h1, .round-id, .meters, .fault-strip, .winner-rank, .state,
       .panel-label, .winner-name, .slate-stats, .step, .recovery-detail,
@@ -254,7 +278,7 @@
       grid-template-rows: minmax(0, 1fr) 21.5cqh;
       row-gap: 2cqh;
     }
-    .stage.recovering .board { top: 22.5cqh; }
+    .stage:is(.recovering, .badge-fault) .board { top: 22.5cqh; }
     .stage.finished .board { bottom: 9cqh; }
     .stage.tray-open .board { bottom: 20cqh; }
     .stage.tray-open.tray-tall .board { bottom: 36cqh; }
@@ -309,7 +333,7 @@
     }
     .callsign {
       min-width: 0;
-      color: var(--silk-dim);
+      color: var(--silk);
       font-size: min(3.7cqh, calc(var(--lane-h) * .25));
       line-height: 1.05;
       letter-spacing: .04em;
@@ -330,7 +354,7 @@
       font-size: max(var(--floor), calc(var(--lane-h) * .14));
       letter-spacing: .06em;
     }
-    .state.fault { color: var(--fault); }
+    .state:is(.fault, .miss) { color: var(--fault); }
     .state.good { color: var(--gold); }
     .state .retry { color: var(--gold); }
     .score {
@@ -447,7 +471,7 @@
     }
     .panel-label {
       display: block;
-      margin-bottom: 1.1cqh;
+      margin-bottom: var(--label-gap);
       color: var(--gold);
       letter-spacing: .18em;
     }
@@ -457,16 +481,16 @@
       overflow: hidden;
       display: -webkit-box;
       -webkit-box-orient: vertical;
-      -webkit-line-clamp: 4;
-      font-size: 3.1cqh;
+      -webkit-line-clamp: var(--clamp-question);
+      font-size: var(--size-question);
       font-weight: 450;
-      line-height: 1.25;
+      line-height: var(--q-leading);
     }
     .spot-a {
       display: block;
-      margin-top: 1.2cqh;
+      margin-top: var(--rail-gap);
       color: var(--gold);
-      font-size: 2.7cqh;
+      font-size: var(--size-answer);
       letter-spacing: .04em;
     }
     .spot-foot {
@@ -474,18 +498,18 @@
       align-items: center;
       justify-content: space-between;
       gap: 1cqw;
-      margin-top: 1.4cqh;
-      padding-top: 1.1cqh;
+      margin-top: var(--rail-gap);
+      padding-top: var(--rail-gap);
       border-top: var(--hairline) solid var(--rule);
     }
     .spot-who {
       color: var(--silk);
-      font-size: 2.4cqh;
+      font-size: var(--size-who);
     }
     .spot-pts {
       flex: none;
       color: var(--gold);
-      font-size: 4.2cqh;
+      font-size: var(--size-points);
       font-weight: 500;
     }
     .spot-pts.miss { color: var(--fault); }
@@ -502,9 +526,8 @@
       letter-spacing: .04em;
       display: -webkit-box;
       -webkit-box-orient: vertical;
-      -webkit-line-clamp: 2;
+      -webkit-line-clamp: var(--clamp-tick);
     }
-    .stage.wide .tick { -webkit-line-clamp: 1; }
     .stage.wide .spotlight {
       display: grid;
       grid-template-rows: auto minmax(0, 1fr) auto auto;
@@ -512,22 +535,6 @@
       min-height: 0;
       overflow: hidden;
     }
-    .stage.wide .spotlight .panel-label { margin-bottom: .6cqh; }
-    .stage.wide .spot-q {
-      -webkit-line-clamp: 2;
-      font-size: 2.4cqh;
-      line-height: 1.18;
-    }
-    .stage.wide .spot-a {
-      margin-top: .6cqh;
-      font-size: 2.2cqh;
-    }
-    .stage.wide .spot-foot {
-      margin-top: .7cqh;
-      padding-top: .7cqh;
-    }
-    .stage.wide .spot-who { font-size: 2cqh; }
-    .stage.wide .spot-pts { font-size: 3.2cqh; }
     .tick.fault { color: var(--fault); border-color: var(--fault); }
     .tick.chaos { color: var(--gold); border-color: var(--gold); }
     .tick.recover { color: var(--silk); border-color: var(--gold); }
@@ -549,7 +556,7 @@
     .winner-name {
       margin: 0;
       color: var(--gold-bright);
-      font-size: 5.6cqh;
+      font-size: var(--size-winner);
       font-weight: 600;
       line-height: 1.06;
       letter-spacing: .01em;
@@ -568,7 +575,7 @@
       display: block;
       color: var(--silk);
       font-family: var(--font-display);
-      font-size: 3.6cqh;
+      font-size: var(--size-stat);
       font-weight: 500;
     }
     .slate-stats span { color: var(--silk-dim); }
@@ -581,7 +588,6 @@
       border-top: 0;
       border-inline-start: var(--hairline) solid var(--rule);
     }
-    .stage.wide .winner-name { font-size: 4.5cqh; }
     .slate-art {
       align-self: end;
       justify-self: end;
@@ -626,13 +632,17 @@
     .attract {
       position: absolute;
       z-index: 2;
-      inset: 17.5cqh var(--frame-gutter) 4.5cqh;
+      top: 17.5cqh;
+      inset-inline: var(--frame-gutter);
+      bottom: 4.5cqh;
       display: none;
       grid-template-columns: minmax(0, 30cqw) minmax(0, 1fr);
       align-items: center;
       column-gap: 5cqw;
     }
     .stage:is(.waiting, .intermission) .attract { display: grid; }
+    .stage.tray-open .attract { bottom: 20cqh; }
+    .stage.tray-open.tray-tall .attract { bottom: 36cqh; }
     .attract-art { justify-self: center; width: 92%; height: auto; max-height: 60cqh; object-fit: contain; }
     .attract-copy { min-width: 0; }
     .attract-kicker {
@@ -680,6 +690,18 @@
     .story-step.done::after { transform: scaleX(1); }
     .story-step.active::after { animation: story-fill 7s linear forwards; }
     @keyframes story-fill { to { transform: scaleX(1); } }
+    .last-round {
+      display: block;
+      margin-top: 2.2cqh;
+      padding-top: 1.4cqh;
+      border-top: var(--hairline) solid var(--rule);
+      color: var(--gold);
+      font-family: var(--font-mono);
+      font-size: var(--floor);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .last-round[hidden] { display: none; }
     .roster-label {
       display: block;
       margin-top: 2.5cqh;
@@ -942,7 +964,7 @@
             <span class="step">Process lost</span>
             <span class="step">New process ID</span>
             <span class="step">Temporal query</span>
-            <span class="step">State matched</span>
+            <span class="step">State continued</span>
           </div>
           <span class="recovery-detail" id="recoveryDetail">Temporal is holding the game state</span>
         </div>
@@ -956,6 +978,7 @@
         <h2 class="attract-head" id="attractHead">Every badge is a Rust Worker</h2>
         <span class="attract-sub" id="attractSub">Questions are Temporal Activities delivered from one shared Task Queue.</span>
         <div class="story-progress" id="storyProgress" aria-hidden="true"></div>
+        <span class="last-round" id="lastRound" hidden></span>
         <span class="roster-label" id="rosterLabel">Waiting for the first Worker</span>
         <div class="roster" id="roster"></div>
         <button class="start" id="start" type="button">Start 60 sec round</button>
@@ -982,6 +1005,7 @@
             <button class="control" type="button" data-chaos="rust-only"><strong>Rust only</strong><small>Update // 10 seconds</small></button>
             <button class="control" type="button" data-chaos="sudden-death"><strong>Sudden death</strong><small>Next correct answer wins</small></button>
             <button class="control" type="button" data-chaos="extend"><strong>+30 seconds</strong><small>Extend durable timer once</small></button>
+            <button class="control" id="endRound" type="button"><strong>End round now</strong><small>Update // closes within 1 second</small></button>
             <button class="control crash" id="crashMac" type="button"><strong>Crash the Mac Worker</strong></button>
           </div>
         </section>
@@ -999,11 +1023,22 @@
 
   <script>
     const SPOT_DWELL_MS = 4000;
-    const EVENT_HOLD_MS = {fault: 6000, good: 2500};
+    const EVENT_HOLD_MS = {fault: 6000, miss: 1500, good: 2500};
     const MAX_LANES = 10;
     const TICK_LINES = 5;
     const ATTRACT_STORY_MS = 7000;
     const POST_ROUND_HOLD_MS = 30000;
+    /* Recovery must never be able to wedge the board, so completion is bounded
+       by wall clock as well as by proof. */
+    const RECOVERY_TIMEOUT_MS = 12000;
+    /* Lanes are sorted, but a 250ms snapshot cadence would thrash them, so
+       reordering settles on this interval. */
+    const ORDER_SETTLE_MS = 800;
+    const REORDER_MS = 400;
+    /* Below this spread, normalising the field would make a trivial lead look
+       like a rout. */
+    const BAR_STRETCH_MIN_SPREAD = 5;
+    const RATE_WINDOW_MS = 5000;
     const ATTRACT_STORIES = [
       {
         kicker: 'Temporal Rust SDK · 01/03',
@@ -1046,6 +1081,10 @@
     let attractStoryStartedAt = Date.now();
     let postRoundTimer;
     let postRoundGameId = null;
+    let recoveryStartedAt = 0;
+    let lastOrderAt = 0;
+    let rateSamples = [];
+    let settledRanks = new Map();
 
     const el = id => document.getElementById(id);
 
@@ -1053,12 +1092,21 @@
 
     function orderedPlayers(snapshot) {
       const incoming = Object.values(snapshot.players || {});
-      const incomingIds = new Set(incoming.map(player => player.badge_id));
-      laneOrder = laneOrder.filter(id => incomingIds.has(id));
-      for (const player of incoming) {
-        if (!laneOrder.includes(player.badge_id)) laneOrder.push(player.badge_id);
-      }
       const byId = new Map(incoming.map(player => [player.badge_id, player]));
+      const byScore = (left, right) =>
+        right.score - left.score || left.callsign.localeCompare(right.callsign);
+      const known = laneOrder.filter(id => byId.has(id));
+      const joined = incoming.some(player => !laneOrder.includes(player.badge_id));
+      const settled = snapshot.status !== 'running';
+      const now = Date.now();
+      if (settled || joined || known.length === 0 || now - lastOrderAt >= ORDER_SETTLE_MS) {
+        const sorted = [...incoming].sort(byScore);
+        laneOrder = sorted.map(player => player.badge_id);
+        settledRanks = rankPlayers(sorted);
+        lastOrderAt = now;
+      } else {
+        laneOrder = known;
+      }
       return laneOrder.map(id => byId.get(id)).filter(Boolean).slice(0, MAX_LANES);
     }
 
@@ -1141,11 +1189,11 @@
           if (player.panics > previous.panics) {
             noteEvent(player.badge_id, 'Crashed → Temporal retrying', 'fault');
           } else if (player.wrong > previous.wrong) {
-            noteEvent(player.badge_id, 'Wrong answer ' + (player.score - previous.score), 'fault');
-          } else if (player.correct > previous.correct) {
-            const gained = player.score - previous.score;
-            noteEvent(player.badge_id, 'Correct ' + (gained >= 0 ? '+' : '') + gained, 'good');
+            noteEvent(player.badge_id, 'Wrong answer ' + (player.score - previous.score), 'miss');
           }
+          /* Routine correct answers are already said three ways -- score
+             count-up, gold flash, and the bar advancing -- so they stay out of
+             the text, which would otherwise never return to telemetry. */
         }
         if (reassignmentIsNew && reassignment.to_callsign === player.callsign) {
           noteEvent(player.badge_id, 'Picked up attempt ' + reassignment.attempt, 'good');
@@ -1205,11 +1253,45 @@
       requestAnimationFrame(step);
     }
 
+    function reorderLanes(lanes, nodes) {
+      const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reduceMotion) {
+        nodes.forEach(node => lanes.appendChild(node));
+        return;
+      }
+      const before = new Map(nodes.map(node => [node, node.getBoundingClientRect()]));
+      nodes.forEach(node => lanes.appendChild(node));
+      nodes.forEach(node => {
+        node.style.transition = 'none';
+        node.style.transform = '';
+      });
+      void lanes.offsetHeight;
+      const moved = [];
+      for (const node of nodes) {
+        const from = before.get(node);
+        const to = node.getBoundingClientRect();
+        const dx = from.left - to.left;
+        const dy = from.top - to.top;
+        if (Math.abs(dx) < 1 && Math.abs(dy) < 1) { node.style.transition = ''; continue; }
+        node.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+        moved.push(node);
+      }
+      if (!moved.length) return;
+      void lanes.offsetHeight;
+      for (const node of moved) {
+        node.style.transition = 'transform ' + REORDER_MS + 'ms var(--ease)';
+        node.style.transform = '';
+      }
+    }
+
     function paintLanes(players, snapshot) {
-      const ranks = rankPlayers(players);
+      const ranks = settledRanks;
       const winners = new Set(snapshot.status === 'finished' ? (snapshot.winners || []) : []);
       const scores = players.map(player => player.score);
-      const leader = Math.max(0, ...scores);
+      const positives = scores.filter(score => score > 0);
+      const high = positives.length ? Math.max(...positives) : 0;
+      const low = positives.length ? Math.min(...positives) : 0;
+      const stretch = high - low >= BAR_STRETCH_MIN_SPREAD;
       const deepest = Math.min(0, ...scores);
       const lanes = el('lanes');
       const twoColumns = players.length > 6;
@@ -1238,19 +1320,22 @@
         rank.classList.toggle('winner-rank', isWinner);
         rank.textContent = isWinner
           ? (winners.size > 1 ? 'Tied' : 'Winner')
-          : String(ranks.get(player.badge_id)).padStart(2, '0');
+          : String(ranks.get(player.badge_id) ?? 0).padStart(2, '0');
         lane.querySelector('.callsign').textContent = player.callsign;
         lane.classList.toggle('column-start', index === 0 || (twoColumns && index === rows));
         lane.classList.toggle('win', isWinner);
         lane.querySelector('.plate')?.remove();
 
-        /* Bar length is relative to the leader. All bars share one duration and
-           easing so a rescale reads as a single coordinated settle. */
+        /* Bars normalise to the field spread so a clustered finish still reads
+           as a staircase, falling back to leader-relative while the spread is
+           too small to stretch honestly. */
         const routed = lane.querySelector('.routed');
         let fraction = 0;
         let negative = false;
-        if (player.score > 0 && leader > 0) {
-          fraction = player.score / leader;
+        if (player.score > 0 && high > 0) {
+          fraction = stretch
+            ? 0.08 + 0.92 * ((player.score - low) / (high - low))
+            : player.score / high;
         } else if (player.score < 0) {
           negative = true;
           fraction = Math.min(1, Math.abs(player.score) / Math.max(1, Math.abs(deepest)));
@@ -1261,8 +1346,8 @@
 
         animateScore(lane, lane._score, player.score);
         lane._score = player.score;
-        lanes.appendChild(lane);
       }
+      reorderLanes(lanes, players.map(player => laneNodes.get(player.badge_id)));
 
       const live = new Set(players.map(player => player.badge_id));
       for (const [badgeId, lane] of laneNodes) {
@@ -1302,23 +1387,31 @@
       paintSpotlight(answer);
     }
 
-    function tickKind(text) {
-      const lower = text.toLowerCase();
-      if (/crash|missed|rejected|exhausted/.test(lower)) return 'fault';
-      if (lower.startsWith('chaos')) return 'chaos';
-      if (/recovered|reassign|retry/.test(lower)) return 'recover';
-      return '';
-    }
+    /* The Workflow now tags every event with a kind, so the ticker filters on
+       data instead of pattern-matching English that workflow.rs is free to
+       reword. At ten badges routine answers arrive several times a second and
+       would flush every fault out of the feed. */
+    const TICK_CLASS = {fault: 'fault', chaos: 'chaos', handoff: 'recover', lifecycle: ''};
 
     function paintTicker(events) {
       /* The wide-mode bottom band is shorter than the rail, so it holds one
          line fewer. */
       const limit = el('stage').classList.contains('wide') ? TICK_LINES - 1 : TICK_LINES;
-      const recent = (events || []).slice(-limit).reverse();
-      el('tickList').replaceChildren(...recent.map(text => {
+      const durable = (events || []).filter(event => event.kind !== 'answer');
+      if (!durable.length) {
+        const idle = document.createElement('div');
+        idle.className = 'tick';
+        idle.textContent = state.status === 'running'
+          ? 'No faults · every Activity completing'
+          : 'No durable events yet';
+        el('tickList').replaceChildren(idle);
+        return;
+      }
+      const recent = durable.slice(-limit).reverse();
+      el('tickList').replaceChildren(...recent.map(event => {
         const line = document.createElement('div');
-        line.className = ('tick ' + tickKind(text)).trim();
-        line.textContent = text;
+        line.className = ('tick ' + (TICK_CLASS[event.kind] ?? '')).trim();
+        line.textContent = event.text;
         return line;
       }));
     }
@@ -1369,6 +1462,40 @@
 
     /* ---------- header meters and chaos chips ---------- */
 
+    function activityRate(snapshot) {
+      const now = Date.now();
+      rateSamples.push({at: now, count: snapshot.completed_questions || 0});
+      rateSamples = rateSamples.filter(sample => now - sample.at <= RATE_WINDOW_MS);
+      if (rateSamples.length < 2) return null;
+      const first = rateSamples[0];
+      const last = rateSamples[rateSamples.length - 1];
+      const seconds = (last.at - first.at) / 1000;
+      if (seconds < 0.5) return null;
+      return Math.max(0, (last.count - first.count) / seconds);
+    }
+
+    function paintMeters(snapshot) {
+      const activities = snapshot.completed_questions || 0;
+      const rate = snapshot.status === 'running' ? activityRate(snapshot) : null;
+      el('meterQuestions').textContent = rate === null
+        ? activities + '/' + (snapshot.scheduled_questions || 0) + ' questions'
+        : activities + ' activities · ' + rate.toFixed(1) + '/sec';
+      el('meterHandoffs').textContent = (snapshot.reassignments || 0) + ' handoffs';
+    }
+
+    function paintLastRound(snapshot) {
+      const node = el('lastRound');
+      const winners = snapshot.winners || [];
+      if (snapshot.status !== 'finished' || !winners.length) {
+        node.hidden = true;
+        return;
+      }
+      const best = Math.max(0, ...Object.values(snapshot.players || {}).map(player => player.score));
+      node.hidden = false;
+      node.textContent = 'Last round · ' + winners.join(' + ') + ' · ' + best +
+        ' · ' + (snapshot.completed_questions || 0) + ' activities';
+    }
+
     function paintChips() {
       const now = Date.now();
       const chaos = state.chaos || {};
@@ -1387,6 +1514,7 @@
         ? 'Active // ' + chips.map(chip => chip[0]).join(' // ')
         : 'Validated Workflow Updates';
       note.classList.toggle('active', chips.length > 0);
+      el('endRound').disabled = state.status !== 'running';
       const gameplayModifierActive = chips.some(chip => chip[0] !== '+30 seconds');
       document.querySelectorAll('[data-chaos]').forEach(button => {
         const extension = button.dataset.chaos === 'extend';
@@ -1441,6 +1569,9 @@
         spotPending = null;
         el('spotlight').classList.add('idle');
         el('spotQuestion').textContent = 'Waiting for the first Activity to complete';
+        rateSamples = [];
+        lastOrderAt = 0;
+        settledRanks = new Map();
       }
       state = snapshot;
 
@@ -1465,9 +1596,8 @@
       el('roundId').textContent = snapshot.game_id
         ? 'Game ' + snapshot.game_id.replace(/^trivia-/i, '').slice(0, 8)
         : 'Temporal Workers';
-      el('meterQuestions').textContent =
-        (snapshot.completed_questions || 0) + '/' + (snapshot.scheduled_questions || 0) + ' questions';
-      el('meterHandoffs').textContent = (snapshot.reassignments || 0) + ' handoffs';
+      paintMeters(snapshot);
+      paintLastRound(snapshot);
       el('start').disabled = snapshot.status === 'running';
       el('restart').disabled = snapshot.status === 'running';
       schedulePostRoundIntermission(snapshot);
@@ -1476,7 +1606,11 @@
 
     function tick() {
       let seconds = 60;
-      if (state.deadline_unix_ms) {
+      if (state.status === 'finished') {
+        /* Sudden death and an operator end both close the round before the
+           deadline, and a closed board showing time remaining reads as a bug. */
+        seconds = 0;
+      } else if (state.deadline_unix_ms) {
         seconds = Math.max(0, Math.ceil((state.deadline_unix_ms - Date.now()) / 1000));
       }
       const clock = el('clock');
@@ -1499,12 +1633,12 @@
     }
 
     function setRecoveryStage(stage, detail) {
-      const titles = ['MAC WORKER LOST', 'NEW PROCESS OBSERVED', 'TEMPORAL QUERY SUCCEEDED', 'WORKER RECOVERED'];
+      const titles = ['MAC WORKER LOST', 'NEW PROCESS OBSERVED', 'TEMPORAL QUERY SUCCEEDED', 'STATE CONTINUED'];
       const details = [
         'Temporal is holding the game state',
         detail || 'Supervisor started a new Rust Worker process',
         detail || 'Workflow state returned from Temporal Cloud',
-        detail || 'Returned Workflow state matches the frozen board'
+        detail || 'Returned Workflow state continues the frozen board'
       ];
       el('faultStrip').textContent = titles[stage];
       el('recoveryDetail').textContent = details[stage];
@@ -1512,6 +1646,50 @@
         step.classList.toggle('done', index < stage);
         step.classList.toggle('active', index === stage);
       });
+    }
+
+    /* The badge Workers keep answering while the Mac Worker restarts, so the
+       restored snapshot SHOULD differ from the pre-crash one. Demanding equal
+       digests is unwinnable mid-round; the honest invariant is that the game is
+       the same and no badge went backwards. */
+    function stateContinued(before, after) {
+      if (!before || !after) return false;
+      if ((before.game_id || null) !== (after.game_id || null)) return false;
+      const was = new Map(Object.values(before.players || {}).map(p => [p.badge_id, p]));
+      const now = Object.values(after.players || {});
+      for (const player of now) {
+        const previous = was.get(player.badge_id);
+        if (!previous) continue;
+        if (player.correct < previous.correct) return false;
+        if (player.wrong < previous.wrong) return false;
+        if (player.panics < previous.panics) return false;
+      }
+      const survivors = now.filter(player => was.has(player.badge_id)).length;
+      return survivors === was.size;
+    }
+
+    function continuityDetail(before, after) {
+      const badges = Object.keys(after.players || {}).length;
+      const gained = Object.values(after.players || {})
+        .reduce((total, player) => total + (player.correct || 0), 0) -
+        Object.values(before.players || {})
+        .reduce((total, player) => total + (player.correct || 0), 0);
+      return badges + ' badges held · ' + Math.max(0, gained) +
+        ' Activities completed while the Mac was down';
+    }
+
+    function finishRecovery(proof, detail) {
+      if (proof) {
+        currentProcessProof = proof;
+        render(proof.snapshot);
+      }
+      setRecoveryStage(3, detail);
+      clearTimeout(recoveryPollTimer);
+      recoveryPollTimer = setTimeout(() => {
+        el('stage').classList.remove('recovering');
+        recoveryActive = false;
+        refreshState().catch(() => {});
+      }, 2500);
     }
 
     function beginRecovery(proof = currentProcessProof) {
@@ -1523,6 +1701,7 @@
       }
       recoveryActive = true;
       recoveryProof = proof;
+      recoveryStartedAt = Date.now();
       processLossObserved = false;
       clearTimeout(recoveryPollTimer);
       el('stage').classList.add('recovering');
@@ -1545,23 +1724,24 @@
           }
           setRecoveryStage(1, 'PID ' + proof.process_id + ' · instance ' + proof.instance_id.slice(0, 8));
           if (proof.temporal_query_succeeded) {
-            setRecoveryStage(2, 'Workflow query succeeded in Temporal Cloud');
+            setRecoveryStage(2,
+              'digest ' + recoveryProof.snapshot_digest.slice(0, 8) +
+              ' → ' + proof.restored_snapshot_digest.slice(0, 8));
           }
-          if (proof.temporal_query_succeeded && proof.restored_snapshot_digest === recoveryProof.snapshot_digest) {
-            currentProcessProof = proof;
-            render(proof.snapshot);
-            setRecoveryStage(3);
-            clearTimeout(recoveryPollTimer);
-            recoveryPollTimer = setTimeout(() => {
-              el('stage').classList.remove('recovering');
-              recoveryActive = false;
-            }, 2500);
+          if (proof.temporal_query_succeeded &&
+              stateContinued(recoveryProof.snapshot, proof.snapshot)) {
+            finishRecovery(proof, continuityDetail(recoveryProof.snapshot, proof.snapshot));
             return;
           }
         }
       } catch (_) {
         processLossObserved = true;
         setRecoveryStage(0);
+      }
+      /* Whatever happens, the board must come back. */
+      if (Date.now() - recoveryStartedAt > RECOVERY_TIMEOUT_MS) {
+        finishRecovery(currentProcessProof, 'Recovery timed out · resuming live state');
+        return;
       }
       recoveryPollTimer = setTimeout(pollRecovery, 250);
     }
@@ -1709,6 +1889,19 @@
       });
     });
 
+    el('endRound').addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/end-round', {method: 'POST'});
+        if (!response.ok) throw new Error(await response.text());
+        await refreshState();
+      } catch (error) {
+        showError(error.message);
+        button.disabled = false;
+      }
+    });
+
     el('crashMac').addEventListener('click', async () => {
       try {
         const proofResponse = await fetch('/api/recovery', {cache: 'no-store'});
@@ -1739,7 +1932,27 @@
       else openTray();
     });
     el('trayClose').addEventListener('click', closeTray);
+    /* 1-4 fire the chaos Updates and C crashes the Mac Worker, so an operator
+       can hit a beat without opening the tray over the board. C confirms first
+       because it really does kill the process. */
+    const CHAOS_KEYS = {'1': 'double-points', '2': 'rust-only', '3': 'sudden-death', '4': 'extend'};
+
     document.addEventListener('keydown', event => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const chaosKey = CHAOS_KEYS[event.key];
+      if (chaosKey) {
+        const button = document.querySelector('[data-chaos="' + chaosKey + '"]');
+        if (button && !button.disabled) button.click();
+        return;
+      }
+      if (event.key.toLowerCase() === 'e') {
+        if (state.status === 'running') el('endRound').click();
+        return;
+      }
+      if (event.key.toLowerCase() === 'c') {
+        if (state.status === 'running' && confirm('Crash the Mac Worker?')) el('crashMac').click();
+        return;
+      }
       if (event.key.toLowerCase() === 'o' && !event.metaKey && !event.ctrlKey) {
         if (el('stage').classList.contains('tray-open')) closeTray();
         else openTray();

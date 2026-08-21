@@ -170,6 +170,7 @@ async fn main() -> Result<()> {
             .route("/api/events", get(event_stream))
             .route("/api/start", post(start_game))
             .route("/api/chaos/{command}", post(apply_chaos))
+            .route("/api/end-round", post(end_round))
             .route("/api/history", get(round_history))
             .route("/api/crash-worker", post(crash_worker))
             .with_state(state);
@@ -407,6 +408,41 @@ fn is_badge_worker_identity(identity: &str) -> bool {
     identity.starts_with("badge/") || identity.starts_with("esp32-")
 }
 
+/// Update rejections come back as `Update failed:` and mean the Workflow's
+/// validator declined, which is a conflict rather than a transport failure.
+fn update_error(error: impl std::fmt::Display) -> ApiError {
+    let message = error.to_string();
+    let status = if message.starts_with("Update failed:") {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
+    ApiError(status, message)
+}
+
+async fn end_round(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    if state.active_workflow.lock().await.is_none() {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "no game is running".to_owned(),
+        ));
+    }
+    let snapshot = state
+        .client
+        .get_workflow_handle::<GameWorkflowRun>(ACTIVE_WORKFLOW_ID)
+        .execute_update(
+            GameWorkflow::end_round,
+            (),
+            WorkflowExecuteUpdateOptions::default(),
+        )
+        .await
+        .map_err(update_error)?;
+    publish(&state, snapshot.clone()).await;
+    Ok(Json(
+        serde_json::json!({ "accepted": true, "snapshot": snapshot }),
+    ))
+}
+
 async fn apply_chaos(
     State(state): State<AppState>,
     AxumPath(command): AxumPath<String>,
@@ -439,15 +475,7 @@ async fn apply_chaos(
             WorkflowExecuteUpdateOptions::default(),
         )
         .await
-        .map_err(|error| {
-            let message = error.to_string();
-            let status = if message.starts_with("Update failed:") {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::BAD_GATEWAY
-            };
-            ApiError(status, message)
-        })?;
+        .map_err(update_error)?;
     publish(&state, snapshot.clone()).await;
     Ok(Json(
         serde_json::json!({ "accepted": true, "snapshot": snapshot }),

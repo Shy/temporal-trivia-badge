@@ -14,7 +14,7 @@ use temporalio_sdk::{
 
 use crate::model::{
     AnswerSpotlight, BADGE_TASK_QUEUE, BadgeAnswer, BadgeEvent, BadgeFailure, CHAOS_DURATION_MS,
-    ChaosCommand, GAME_EXTENSION_MS, GameInput, GameSnapshot, GameStatus, PlayerScore,
+    ChaosCommand, EventKind, GAME_EXTENSION_MS, GameInput, GameSnapshot, GameStatus, PlayerScore,
     PowerupNotice, Question, QuestionTask, Reassignment, RoundMemo,
 };
 
@@ -193,9 +193,13 @@ impl GameWorkflow {
                             }
                         }
                         Err(error) => ctx.state_mut(|state| {
-                            state.snapshot.push_event(format!(
-                                "Question {} closed without an answer: {error}", question.id
-                            ));
+                            state.snapshot.push_kind(
+                                EventKind::Fault,
+                                format!(
+                                    "Question {} closed without an answer: {error}",
+                                    question.id
+                                ),
+                            );
                         }),
                     }
                 }
@@ -238,13 +242,19 @@ impl GameWorkflow {
             self.snapshot.reassignments += 1;
             self.snapshot.heartbeat_timeouts += 1;
             self.snapshot.latest_reassignment = Some(reassignment.clone());
-            self.snapshot.push_event(format!(
-                "WORK REASSIGNED · {} -> {} · ATTEMPT {} · {}",
-                reassignment.from_callsign,
-                reassignment.to_callsign,
-                reassignment.attempt,
-                reassignment.reason
-            ));
+            self.snapshot.push_kind(
+                EventKind::Handoff,
+                // The question id distinguishes two handoffs that otherwise
+                // read identically in the feed.
+                format!(
+                    "WORK REASSIGNED · {} · {} -> {} · ATTEMPT {} · {}",
+                    reassignment.question_id,
+                    reassignment.from_callsign,
+                    reassignment.to_callsign,
+                    reassignment.attempt,
+                    reassignment.reason
+                ),
+            );
         }
         self.assignments
             .insert(event.question_id.clone(), event.clone());
@@ -295,16 +305,18 @@ impl GameWorkflow {
                 ..Default::default()
             });
         player.panics += 1;
-        self.snapshot.push_event(format!(
-            "{} crashed on {}",
-            event.callsign, event.question_id
-        ));
+        self.snapshot.push_kind(
+            EventKind::Fault,
+            format!("{} crashed on {}", event.callsign, event.question_id),
+        );
     }
 
     #[signal]
     pub fn recovered(&mut self, _ctx: &mut SyncWorkflowContext<Self>, event: BadgeEvent) {
-        self.snapshot
-            .push_event(format!("{} recovered; question returned", event.callsign));
+        self.snapshot.push_kind(
+            EventKind::Handoff,
+            format!("{} recovered; question returned", event.callsign),
+        );
     }
 
     #[update_validator(apply_chaos)]
@@ -342,18 +354,24 @@ impl GameWorkflow {
             ChaosCommand::DoublePoints => {
                 self.snapshot.chaos.double_points_until_unix_ms =
                     Some(now_unix_ms + CHAOS_DURATION_MS);
-                self.snapshot
-                    .push_event("CHAOS: double points for 10 seconds".to_owned());
+                self.snapshot.push_kind(
+                    EventKind::Chaos,
+                    "CHAOS: double points for 10 seconds".to_owned(),
+                );
             }
             ChaosCommand::RustOnly => {
                 self.snapshot.chaos.rust_only_until_unix_ms = Some(now_unix_ms + CHAOS_DURATION_MS);
-                self.snapshot
-                    .push_event("CHAOS: Rust questions only for 10 seconds".to_owned());
+                self.snapshot.push_kind(
+                    EventKind::Chaos,
+                    "CHAOS: Rust questions only for 10 seconds".to_owned(),
+                );
             }
             ChaosCommand::SuddenDeath => {
                 self.snapshot.chaos.sudden_death = true;
-                self.snapshot
-                    .push_event("CHAOS: next correct answer ends the round".to_owned());
+                self.snapshot.push_kind(
+                    EventKind::Chaos,
+                    "CHAOS: next correct answer ends the round".to_owned(),
+                );
             }
             ChaosCommand::ExtendThirtySeconds => {
                 self.snapshot.chaos.extension_used = true;
@@ -361,8 +379,10 @@ impl GameWorkflow {
                     .snapshot
                     .deadline_unix_ms
                     .map(|deadline| deadline + GAME_EXTENSION_MS);
-                self.snapshot
-                    .push_event("CHAOS: Temporal timer extended by 30 seconds".to_owned());
+                self.snapshot.push_kind(
+                    EventKind::Chaos,
+                    "CHAOS: Temporal timer extended by 30 seconds".to_owned(),
+                );
             }
         }
         let sequence = self
@@ -376,6 +396,30 @@ impl GameWorkflow {
             command,
             issued_unix_ms: now_unix_ms,
         });
+        self.snapshot.clone()
+    }
+
+    #[update_validator(end_round)]
+    fn validate_end_round(
+        &self,
+        _ctx: &WorkflowContextView,
+        _input: &(),
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.snapshot.status != GameStatus::Running {
+            return Err("no game is running".into());
+        }
+        Ok(())
+    }
+
+    #[update]
+    pub fn end_round(&mut self, ctx: &mut SyncWorkflowContext<Self>, _input: ()) -> GameSnapshot {
+        let now_unix_ms = unix_ms(ctx.workflow_time().unwrap_or(UNIX_EPOCH));
+        // The run loop re-reads the deadline on every tick, so bringing it
+        // forward closes the round within one tick. No second control path, and
+        // the round still completes through the normal finish path.
+        self.snapshot.deadline_unix_ms = Some(now_unix_ms);
+        self.snapshot
+            .push_event("Operator ended the round early".to_owned());
         self.snapshot.clone()
     }
 
@@ -393,10 +437,10 @@ fn record_answer(
 ) -> bool {
     ctx.state_mut(|state| {
         if answer.question_id != question.id || answer.selected_index > 3 {
-            state.snapshot.push_event(format!(
-                "Rejected malformed answer from {}",
-                answer.callsign
-            ));
+            state.snapshot.push_kind(
+                EventKind::Fault,
+                format!("Rejected malformed answer from {}", answer.callsign),
+            );
             return false;
         }
         let was_correct = answer.selected_index == question.correct_index;
@@ -429,12 +473,15 @@ fn record_answer(
             score,
             points,
         });
-        state.snapshot.push_event(format!(
-            "{} answered {} ({:+})",
-            answer.callsign,
-            if was_correct { "correctly" } else { "wrong" },
-            if was_correct { points } else { -points }
-        ));
+        state.snapshot.push_kind(
+            EventKind::Answer,
+            format!(
+                "{} answered {} ({:+})",
+                answer.callsign,
+                if was_correct { "correctly" } else { "wrong" },
+                if was_correct { points } else { -points }
+            ),
+        );
         state.snapshot.chaos.sudden_death && was_correct
     })
 }

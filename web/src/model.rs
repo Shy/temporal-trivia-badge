@@ -1,6 +1,6 @@
 pub use temporal_trivia_shared::{
     AnswerSpotlight, BADGE_TASK_QUEUE, BadgeAnswer, BadgeEvent, BadgeFailure, CHAOS_DURATION_MS,
-    ChaosCommand, GAME_EXTENSION_MS, GAME_SECONDS, GameInput, GameSnapshot, GameStatus,
+    ChaosCommand, EventKind, GAME_EXTENSION_MS, GAME_SECONDS, GameInput, GameSnapshot, GameStatus,
     PlayerScore, PowerupNotice, Question, QuestionTask, Reassignment, WEB_TASK_QUEUE,
 };
 

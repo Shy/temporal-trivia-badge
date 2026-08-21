@@ -15,6 +15,8 @@ pub const WEB_TASK_QUEUE: &str = BADGE_TASK_QUEUE;
 pub const GAME_SECONDS: u64 = 60;
 pub const CHAOS_DURATION_MS: u64 = 10_000;
 pub const GAME_EXTENSION_MS: u64 = 30_000;
+/// Rolling event window carried on every snapshot.
+pub const EVENT_WINDOW: usize = 24;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvParseError {
@@ -278,6 +280,32 @@ const fn default_points() -> i32 {
     1
 }
 
+/// Why an event happened, so consumers can filter without pattern-matching on
+/// English prose. At ten badges routine answers arrive several times a second
+/// and would otherwise flush every fault out of any fixed-size feed.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    /// Round lifecycle: started, badge joined, winner, deck exhausted.
+    #[default]
+    Lifecycle,
+    /// Routine gameplay: a badge answered, correctly or not.
+    Answer,
+    /// A failure: a crash, a heartbeat timeout, or a rejected payload.
+    Fault,
+    /// Temporal moved unfinished work to a different badge.
+    Handoff,
+    /// An operator powerup landed as a validated Workflow Update.
+    Chaos,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GameEvent {
+    pub text: String,
+    #[serde(default)]
+    pub kind: EventKind,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GameSnapshot {
     pub game_id: Option<String>,
@@ -288,7 +316,7 @@ pub struct GameSnapshot {
     pub scheduled_questions: u32,
     pub players: BTreeMap<String, PlayerScore>,
     pub latest_answer: Option<AnswerSpotlight>,
-    pub events: Vec<String>,
+    pub events: Vec<GameEvent>,
     pub winners: Vec<String>,
     #[serde(default)]
     pub reassignments: u32,
@@ -305,10 +333,25 @@ pub struct GameSnapshot {
 }
 
 impl GameSnapshot {
-    pub fn push_event(&mut self, event: String) {
-        self.events.push(event);
-        if self.events.len() > 12 {
-            self.events.remove(0);
+    /// Records a lifecycle event. Call [`GameSnapshot::push_kind`] when the
+    /// event is anything a consumer might want to filter on.
+    pub fn push_event(&mut self, text: String) {
+        self.push_kind(EventKind::Lifecycle, text);
+    }
+
+    pub fn push_kind(&mut self, kind: EventKind, text: String) {
+        self.events.push(GameEvent { text, kind });
+        while self.events.len() > EVENT_WINDOW {
+            // Ten badges produce several answers a second, which would evict
+            // every fault, handoff and powerup from the window within a second
+            // or two. Routine answers are therefore dropped first, so the
+            // durable story survives until the window fills with it.
+            let victim = self
+                .events
+                .iter()
+                .position(|event| event.kind == EventKind::Answer)
+                .unwrap_or(0);
+            self.events.remove(victim);
         }
     }
 

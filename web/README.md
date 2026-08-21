@@ -64,10 +64,18 @@ validated Workflow Updates provide:
 - Rust-only scheduling for 10 seconds.
 - Sudden death, where the next correct answer ends the round.
 - One 30-second extension.
+- Ending the round immediately, for when the crowd moves on.
 - A supervised Mac Worker crash and automatic restart demonstration.
 
 Double points, Rust only, and sudden death are mutually exclusive. The timer
-extension is independent. The History tab includes the exact Workflow ID and
+extension is independent. Ending a round brings the durable deadline forward, so
+it closes through the normal finish path within about a second and still writes
+its round summary.
+
+Every control has a keyboard shortcut so a beat can be hit without opening the
+tray over the board: `1` double points, `2` Rust only, `3` sudden death, `4`
++30 seconds, `E` end the round, and `C` crash the Mac Worker. `C` asks for
+confirmation because it really does kill the process. The History tab includes the exact Workflow ID and
 Run ID and opens the current execution in Temporal Cloud.
 
 Completed rounds are stored in Workflow Memo and listed through Temporal

@@ -34,11 +34,21 @@
 - The TV is a fixed 16:9 race board: a header band carrying the round timer and
   live counters, the badge lanes, and a detail rail. Each lane contains
   callsign, rank, Worker state, score, and a score bar drawn as a routed trace
-  whose length is relative to the current leader. Lanes never reorder during a
-  round; the final board freezes in place and labels all tied winners. The rail
-  carries the last resolved answer and a rolling feed of durable events, and
-  switches to a round summary when the round closes. Above six badges the lanes
-  split into two columns and the rail becomes a bottom band.
+  normalised to the spread of the field, falling back to leader-relative while
+  that spread is too small to stretch honestly. Lanes are ordered by score, so
+  reading order is always first place to last; they resettle at most once per
+  800 ms and the swap animates, and rank is derived from the same settle so a
+  lane's number can never disagree with its position. The final board freezes
+  in place and labels all tied winners. The rail carries the last resolved
+  answer and a rolling feed of durable events, and switches to a round summary
+  when the round closes. Above six badges the lanes split into two columns and
+  the rail becomes a bottom band.
+- Routine answers never enter the durable-events feed. Ten badges answer several
+  times a second, which would evict every fault, handoff and powerup from the
+  window, so the snapshot tags each event with a kind and routine answers are
+  the first dropped when the window is full. Throughput is reported as an
+  activity rate in the header instead. A lane speaks only for a wrong answer, a
+  crash or a retry pickup, and otherwise shows resting telemetry.
 - Selecting New Round first opens a three-part booth attract loop explaining
   Rust Workers, Temporal Activity retry, and the 60-second rules. Starting the
   next Workflow remains a separate deliberate operator action. The finished
@@ -56,8 +66,12 @@
   the frozen board visible while `run-web.sh` restarts the Rust process and the
   Workflow Worker rebuilds game state from Temporal history. Recovery steps
   advance only after observing process loss, a new process identity, a
-  successful Temporal query, and a restored-state digest matching the frozen
-  board.
+  successful Temporal query, and a restored snapshot that continues the frozen
+  board: same game, every badge still present, and no badge's counters going
+  backwards. The badges keep answering while the Mac Worker restarts, so the
+  restored state is expected to have moved on rather than match digest for
+  digest; both digests are shown as evidence. Recovery is also bounded by a
+  timeout so the board can never be left frozen.
 - Finished round summaries are written to Temporal Memo and listed through
   Visibility; no game-history database is required. Typed Search Attributes
   are optional when the Cloud API key has namespace-operator permission.
