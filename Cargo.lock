@@ -159,6 +159,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "badge-screen"
+version = "0.1.0"
+dependencies = [
+ "temporal-trivia-shared",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3073,6 +3080,7 @@ name = "temporal-trivia-badge-firmware"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "badge-screen",
  "embuild",
  "esp-idf-svc",
  "futures",
@@ -3106,6 +3114,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "badge-screen",
  "futures",
  "html-escape",
  "prost-wkt-types",

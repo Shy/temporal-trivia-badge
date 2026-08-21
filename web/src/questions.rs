@@ -660,6 +660,32 @@ mod tests {
         assert!(general_questions().unwrap().len() > 300);
     }
 
+    /// The board renders question text with real fonts, but the badge has a
+    /// 3x5 bitmap face. A character it cannot draw shows as a question mark, so
+    /// an unrenderable deck reads as gibberish on the hardware.
+    #[test]
+    fn every_shipped_question_is_renderable_on_the_badge() {
+        let deck = build_deck(7, 400).expect("build a deck");
+        let mut offenders = Vec::new();
+        for question in &deck {
+            let mut texts = vec![question.prompt.clone()];
+            texts.extend(question.answers.iter().cloned());
+            for text in texts {
+                for character in text.chars() {
+                    if !badge_screen::is_renderable(character) {
+                        offenders.push((character, text.clone()));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "{} characters cannot be drawn on the badge, e.g. {:?}",
+            offenders.len(),
+            &offenders[..offenders.len().min(5)]
+        );
+    }
+
     #[test]
     fn oversized_deck_request_fails_instead_of_returning_partial_work() {
         let error = build_deck(7, 10_000).unwrap_err();

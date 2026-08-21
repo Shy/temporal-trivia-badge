@@ -28,3 +28,7 @@ uuid = { version = "1", features = ["v4"] }
 [[bin]]
 name = "simulate-badges"
 path = "src/bin/simulate_badges.rs"
+
+[dev-dependencies]
+# The deck has to be renderable on the badge, not just on the TV.
+badge-screen = { path = "../badge-screen" }

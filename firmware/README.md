@@ -142,5 +142,25 @@ button input, simulated crash, and sleep/wake behavior.
 Confirm the haptic strength and patterns by hand on the physical badge; serial
 logs can verify the event path but cannot verify how the motor feels.
 
+## Screens
+
+Every OLED screen is composed by the [`badge-screen`](../badge-screen) crate,
+which has no ESP-IDF dependency. That keeps the layout unit tested and lets you
+review all of it without flashing hardware:
+
+```sh
+host_target=$(rustc -vV | awk '/^host:/ { print $2 }')
+cargo test --offline -p badge-screen --target "$host_target"
+cargo run --offline -p badge-screen --bin preview --target "$host_target" > screens.html
+```
+
+Open `screens.html` to see every screen rendered at 128x64. `firmware/display.rs`
+owns the I2C transport and nothing else.
+
+Small text uses Tom Thumb (also published as Fixed4x6), a 3x5 monospace bitmap
+face by Brian Swetland with readability revisions by Robey Pointer, released for
+any use under CC0 / CC-BY 3.0. It replaced a mechanical downsample of the 5x7
+face that rendered `N` as `H` and `0` as `8`.
+
 See the root [engineering journal](../blog.md) for the current Rust SDK
 portability patches and physical validation results.

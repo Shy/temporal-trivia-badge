@@ -1,5 +1,5 @@
 [workspace]
-members = ["firmware", "shared", "web"]
+members = ["badge-screen", "firmware", "shared", "web"]
 resolver = "2"
 
 [profile.dev]

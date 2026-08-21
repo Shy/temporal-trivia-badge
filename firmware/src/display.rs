@@ -1,4 +1,11 @@
+//! I2C transport for the badge OLED.
+//!
+//! Every screen is composed by the `badge-screen` crate, which has no ESP-IDF
+//! dependency and is unit tested and previewed on a development host. This file
+//! owns the panel and nothing else.
+
 use anyhow::{Context, Result, bail};
+use badge_screen::{Canvas, WIDTH};
 use esp_idf_svc::hal::{
     delay::BLOCK,
     gpio::{Gpio4, Gpio5},
@@ -9,13 +16,13 @@ use esp_idf_svc::hal::{
 use crate::model::{ChaosCommand, GameSnapshot, Question};
 
 const ADDRESS: u8 = 0x3c;
-const WIDTH: usize = 128;
-const HEIGHT: usize = 64;
-const BUFFER_LEN: usize = WIDTH * HEIGHT / 8;
+/// The SSD1306 accepts a control byte plus payload per write.
+const MAX_PACKET: usize = 32;
+const FRAME_CHUNK: usize = 16;
 
 pub struct BadgeDisplay {
     i2c: I2cDriver<'static>,
-    buffer: [u8; BUFFER_LEN],
+    canvas: Canvas,
 }
 
 impl BadgeDisplay {
@@ -23,7 +30,7 @@ impl BadgeDisplay {
         let config = I2cConfig::new().baudrate(KiloHertz(400).into());
         let mut display = Self {
             i2c: I2cDriver::new(i2c, sda, scl, &config).context("initialize OLED I2C")?,
-            buffer: [0; BUFFER_LEN],
+            canvas: Canvas::new(),
         };
         display.command(&[
             0xae, 0xd5, 0x80, 0xa8, 0x3f, 0xd3, 0x00, 0x40, 0x8d, 0x14, 0x20, 0x00, 0xa1, 0xc8,
@@ -32,124 +39,52 @@ impl BadgeDisplay {
         Ok(display)
     }
 
-    pub fn show_status(&mut self, title: &str, detail: &str) -> Result<()> {
+    pub fn show_status(&mut self, callsign: &str, detail: &str) -> Result<()> {
         let (headline, subline) = detail.split_once('\n').unwrap_or((detail, ""));
-        let instruction = match headline {
-            "BOOTING" => "STARTING RUST WORKER",
-            "CONNECTING WIFI" => "JOINING BADGE NETWORK",
-            "SYNCING TIME" => "PREPARING CLOUD TLS",
-            "CONNECTING CLOUD" => "CONNECTING TEMPORAL",
-            "RESULT PENDING" => "TEMPORAL HAS THE RESULT",
-            _ => "PLEASE WAIT",
-        };
-        self.show_centered_layout(title, headline, subline, &[instruction])
-    }
-
-    pub fn show_waiting(&mut self, callsign: &str) -> Result<()> {
-        self.show_centered_layout(
-            callsign,
-            "POLLING TEMPORAL",
-            "NEXT QUESTION AUTO",
-            &[
-                "ANSWER: PRESS DIRECTION",
-                "CRASH: HOLD LEFT+RIGHT",
-                "SLEEP: HOLD DOWN 3 SEC",
-            ],
-        )
-    }
-
-    pub fn show_powerup(&mut self, callsign: &str, command: ChaosCommand) -> Result<()> {
-        let (headline, detail, instruction) = match command {
-            ChaosCommand::DoublePoints => ("DOUBLE POINTS", "SCORES X2", "TEMPORAL UPDATE APPLIED"),
-            ChaosCommand::RustOnly => ("RUST ONLY", "10 SECOND FILTER", "TEMPORAL UPDATE APPLIED"),
-            ChaosCommand::SuddenDeath => {
-                ("SUDDEN DEATH", "NEXT RIGHT WINS", "TEMPORAL UPDATE APPLIED")
-            }
-            ChaosCommand::ExtendThirtySeconds => {
-                ("TIME EXTENDED", "+30 SECONDS", "DURABLE TIMER UPDATED")
-            }
-        };
-        self.show_centered_layout(callsign, headline, detail, &[instruction])
-    }
-
-    pub fn show_sleep_countdown(&mut self, callsign: &str, seconds: u64) -> Result<()> {
-        self.show_centered_layout(
-            callsign,
-            &format!("SLEEP IN {seconds}"),
-            "POWERING DOWN",
-            &["KEEP HOLDING DOWN", "RELEASE TO CANCEL"],
-        )
-    }
-
-    pub fn show_sleeping(&mut self, callsign: &str) -> Result<()> {
-        self.show_centered_layout(
-            callsign,
-            "SLEEPING",
-            "POWER OFF ARMED",
-            &["RELEASE BUTTON", "ANY BUTTON WAKES"],
-        )
-    }
-
-    pub fn power_off(&mut self) -> Result<()> {
-        self.buffer.fill(0);
-        self.flush()?;
-        self.command(&[0xae])
-    }
-
-    pub fn show_question(&mut self, callsign: &str, question: &Question) -> Result<()> {
-        self.buffer.fill(0);
-        self.draw_text(0, 0, callsign);
-        self.draw_hline(0, 127, 8);
-        self.draw_compact_wrapped(1, 11, &question.prompt, 31, 3);
-
-        // Same physical layout as the original badge's button cluster:
-        // top/right on row one, left/down on row two.
-        for (index, &(x, y)) in [(0, 30), (65, 30), (0, 48), (65, 48)].iter().enumerate() {
-            self.draw_panel(index, x, y, &question.answers[index]);
-        }
+        self.canvas.status(callsign, headline, subline);
         self.flush()
     }
 
+    pub fn show_waiting(&mut self, callsign: &str) -> Result<()> {
+        self.canvas.waiting(callsign);
+        self.flush()
+    }
+
+    pub fn show_powerup(&mut self, callsign: &str, command: ChaosCommand) -> Result<()> {
+        self.canvas.powerup(callsign, command);
+        self.flush()
+    }
+
+    pub fn show_sleep_countdown(&mut self, callsign: &str, seconds: u64) -> Result<()> {
+        self.canvas.sleep_countdown(callsign, seconds);
+        self.flush()
+    }
+
+    pub fn show_sleeping(&mut self, callsign: &str) -> Result<()> {
+        self.canvas.sleeping(callsign);
+        self.flush()
+    }
+
+    pub fn show_question(&mut self, callsign: &str, question: &Question) -> Result<()> {
+        self.canvas.question(callsign, question);
+        self.flush()
+    }
+
+    /// `score_delta` is the value Temporal will record, so the badge agrees with
+    /// the board while double points is active.
     pub fn show_feedback(&mut self, callsign: &str, correct: bool, score_delta: i32) -> Result<()> {
-        self.show_centered_layout(
-            callsign,
-            if correct { "CORRECT" } else { "WRONG" },
-            if score_delta > 0 {
-                "SCORE +1"
-            } else {
-                "SCORE -1"
-            },
-            &[
-                if correct {
-                    "ANSWER ACCEPTED"
-                } else {
-                    "WRONG ANSWER"
-                },
-                if correct {
-                    "TEMPORAL RECORDED IT"
-                } else {
-                    "ACTIVITY COMPLETED"
-                },
-            ],
-        )
+        self.canvas.feedback(callsign, correct, score_delta);
+        self.flush()
     }
 
     pub fn show_panic(&mut self, callsign: &str) -> Result<()> {
-        self.show_centered_layout(
-            callsign,
-            "WORKER CRASH",
-            "TEMPORAL HOLDS TASK",
-            &["HEARTBEATS STOPPED", "QUESTION WILL RETRY"],
-        )
+        self.canvas.panic(callsign);
+        self.flush()
     }
 
     pub fn show_recovered(&mut self, callsign: &str) -> Result<()> {
-        self.show_centered_layout(
-            callsign,
-            "WORKER BACK",
-            "QUESTION RETURNED",
-            &["CONNECTED TO TEMPORAL", "READY FOR NEW QUESTION"],
-        )
+        self.canvas.recovered(callsign);
+        self.flush()
     }
 
     pub fn show_results(
@@ -158,58 +93,22 @@ impl BadgeDisplay {
         badge_id: &str,
         snapshot: &GameSnapshot,
     ) -> Result<()> {
-        let own = snapshot.players.get(badge_id);
-        let own_score = own.map(|player| player.score).unwrap_or(0);
-        let place = 1 + snapshot
-            .players
-            .values()
-            .filter(|player| player.score > own_score)
-            .count();
-        let won = own.is_some_and(|player| snapshot.winners.contains(&player.callsign));
-        let correct = own.map(|player| player.correct).unwrap_or(0);
-        let wrong = own.map(|player| player.wrong).unwrap_or(0);
-        let score_label = format!("SCORE {own_score}");
-        let place_label = format!("PLACE {place}");
-        let answer_label = format!("RIGHT {correct} / WRONG {wrong}");
-        self.show_centered_layout(
-            callsign,
-            if won { "YOU WON" } else { "ROUND OVER" },
-            &format!("WINNER {}", snapshot.winners.join(" + ")),
-            &[&score_label, &place_label, &answer_label],
-        )
+        self.canvas.results(callsign, badge_id, snapshot);
+        self.flush()
     }
 
-    fn show_centered_layout(
-        &mut self,
-        callsign: &str,
-        headline: &str,
-        detail: &str,
-        instructions: &[&str],
-    ) -> Result<()> {
-        self.buffer.fill(0);
-        self.draw_text(0, 0, callsign);
-        self.draw_hline(0, 127, 8);
-        self.draw_centered_text(11, headline);
-        self.draw_centered_compact(22, detail);
-        let start_y = match instructions.len() {
-            0 => 36,
-            1 => 44,
-            2 => 40,
-            3 => 36,
-            _ => 33,
-        };
-        for (index, instruction) in instructions.iter().take(4).enumerate() {
-            self.draw_centered_compact(start_y + index * 7, instruction);
-        }
-        self.flush()
+    pub fn power_off(&mut self) -> Result<()> {
+        self.canvas.clear();
+        self.flush()?;
+        self.command(&[0xae])
     }
 
     fn command(&mut self, commands: &[u8]) -> Result<()> {
         let packet_len = commands.len() + 1;
-        if packet_len > 32 {
+        if packet_len > MAX_PACKET {
             bail!("OLED command is too long: {} bytes", commands.len());
         }
-        let mut packet = [0_u8; 32];
+        let mut packet = [0_u8; MAX_PACKET];
         packet[1..packet_len].copy_from_slice(commands);
         self.i2c
             .write(ADDRESS, &packet[..packet_len], BLOCK)
@@ -218,9 +117,10 @@ impl BadgeDisplay {
     }
 
     fn flush(&mut self) -> Result<()> {
-        self.command(&[0x21, 0, 127, 0x22, 0, 7])?;
-        for chunk in self.buffer.chunks(16) {
-            let mut packet = [0_u8; 17];
+        let last_column = u8::try_from(WIDTH - 1).unwrap_or(u8::MAX);
+        self.command(&[0x21, 0, last_column, 0x22, 0, 7])?;
+        for chunk in self.canvas.bits().chunks(FRAME_CHUNK) {
+            let mut packet = [0_u8; FRAME_CHUNK + 1];
             packet[0] = 0x40;
             packet[1..].copy_from_slice(chunk);
             self.i2c
@@ -228,223 +128,5 @@ impl BadgeDisplay {
                 .context("write OLED framebuffer chunk")?;
         }
         Ok(())
-    }
-
-    fn draw_text(&mut self, mut x: usize, y: usize, text: &str) {
-        for character in text.chars() {
-            if x + 6 > WIDTH {
-                break;
-            }
-            self.draw_char(x, y, character);
-            x += 6;
-        }
-    }
-
-    fn draw_centered_text(&mut self, y: usize, text: &str) {
-        let visible: String = text.chars().take(21).collect();
-        let width = visible.chars().count().saturating_mul(6).saturating_sub(1);
-        self.draw_text((WIDTH.saturating_sub(width)) / 2, y, &visible);
-    }
-
-    fn draw_centered_compact(&mut self, y: usize, text: &str) {
-        let visible: String = text.chars().take(31).collect();
-        let width = visible.chars().count().saturating_mul(4).saturating_sub(1);
-        self.draw_compact_text((WIDTH.saturating_sub(width)) / 2, y, &visible);
-    }
-
-    fn draw_compact_wrapped(
-        &mut self,
-        x: usize,
-        y: usize,
-        text: &str,
-        max_chars: usize,
-        max_lines: usize,
-    ) {
-        for (line_index, line) in wrap(text, max_chars, max_lines).iter().enumerate() {
-            self.draw_compact_text(x, y + line_index * 6, line);
-        }
-    }
-
-    fn draw_compact_text(&mut self, mut x: usize, y: usize, text: &str) {
-        for character in text.chars() {
-            if x + 3 > WIDTH {
-                break;
-            }
-            self.draw_compact_char(x, y, character);
-            x += 4;
-        }
-    }
-
-    fn draw_compact_char(&mut self, x: usize, y: usize, character: char) {
-        let source = glyph(character);
-        let x_ranges = [(0, 1), (2, 2), (3, 4)];
-        let y_ranges = [(0, 1), (2, 2), (3, 3), (4, 5), (6, 6)];
-        for (target_x, &(from_x, to_x)) in x_ranges.iter().enumerate() {
-            for (target_y, &(from_y, to_y)) in y_ranges.iter().enumerate() {
-                let mut on = false;
-                for column in from_x..=to_x {
-                    for row in from_y..=to_y {
-                        on |= source[column] & (1 << row) != 0;
-                    }
-                }
-                if on {
-                    self.set_pixel(x + target_x, y + target_y);
-                }
-            }
-        }
-    }
-
-    fn draw_hline(&mut self, from_x: usize, to_x: usize, y: usize) {
-        for x in from_x..=to_x {
-            self.set_pixel(x, y);
-        }
-    }
-
-    fn draw_frame(&mut self, x: usize, y: usize, width: usize, height: usize) {
-        for column in (x + 2)..(x + width - 2) {
-            self.set_pixel(column, y);
-            self.set_pixel(column, y + height - 1);
-        }
-        for row in (y + 2)..(y + height - 2) {
-            self.set_pixel(x, row);
-            self.set_pixel(x + width - 1, row);
-        }
-        for (dx, dy) in [
-            (1, 1),
-            (width - 2, 1),
-            (1, height - 2),
-            (width - 2, height - 2),
-        ] {
-            self.set_pixel(x + dx, y + dy);
-        }
-    }
-
-    fn draw_panel(&mut self, index: usize, x: usize, y: usize, label: &str) {
-        self.draw_frame(x, y, 63, 16);
-        self.draw_button_glyph(index, x + 2, y + 3);
-        self.draw_compact_wrapped(x + 14, y + 3, label, 11, 2);
-    }
-
-    fn draw_button_glyph(&mut self, answer_index: usize, x: usize, y: usize) {
-        let bits = match answer_index {
-            0 => &BUTTON_TOP,
-            1 => &BUTTON_RIGHT,
-            2 => &BUTTON_LEFT,
-            _ => &BUTTON_DOWN,
-        };
-        for row in 0..10 {
-            let row_bits = u16::from(bits[row * 2]) | (u16::from(bits[row * 2 + 1]) << 8);
-            for column in 0..10 {
-                if row_bits & (1 << column) != 0 {
-                    self.set_pixel(x + column, y + row);
-                }
-            }
-        }
-    }
-
-    fn draw_char(&mut self, x: usize, y: usize, character: char) {
-        for (column, bits) in glyph(character).iter().enumerate() {
-            for row in 0..7 {
-                if bits & (1 << row) != 0 {
-                    self.set_pixel(x + column, y + row);
-                }
-            }
-        }
-    }
-
-    fn set_pixel(&mut self, x: usize, y: usize) {
-        if x < WIDTH && y < HEIGHT {
-            self.buffer[x + (y / 8) * WIDTH] |= 1 << (y % 8);
-        }
-    }
-}
-
-fn wrap(text: &str, max_chars: usize, max_lines: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        let needed =
-            current.chars().count() + usize::from(!current.is_empty()) + word.chars().count();
-        if needed > max_chars && !current.is_empty() {
-            lines.push(current);
-            current = String::new();
-            if lines.len() == max_lines {
-                return lines;
-            }
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.extend(word.chars().take(max_chars));
-    }
-    if !current.is_empty() && lines.len() < max_lines {
-        lines.push(current);
-    }
-    lines
-}
-
-const BUTTON_TOP: [u8; 20] = [
-    0x30, 0x00, 0x78, 0x00, 0x78, 0x00, 0xB6, 0x01, 0x49, 0x02, 0x49, 0x02, 0xB6, 0x01, 0x48, 0x00,
-    0x48, 0x00, 0x30, 0x00,
-];
-const BUTTON_RIGHT: [u8; 20] = [
-    0x30, 0x00, 0x48, 0x00, 0x48, 0x00, 0xB6, 0x01, 0xC9, 0x03, 0xC9, 0x03, 0xB6, 0x01, 0x48, 0x00,
-    0x48, 0x00, 0x30, 0x00,
-];
-const BUTTON_DOWN: [u8; 20] = [
-    0x30, 0x00, 0x48, 0x00, 0x48, 0x00, 0xB6, 0x01, 0x49, 0x02, 0x49, 0x02, 0xB6, 0x01, 0x78, 0x00,
-    0x78, 0x00, 0x30, 0x00,
-];
-const BUTTON_LEFT: [u8; 20] = [
-    0x30, 0x00, 0x48, 0x00, 0x48, 0x00, 0xB6, 0x01, 0x4F, 0x02, 0x4F, 0x02, 0xB6, 0x01, 0x48, 0x00,
-    0x48, 0x00, 0x30, 0x00,
-];
-
-fn glyph(character: char) -> [u8; 5] {
-    match character.to_ascii_uppercase() {
-        'A' => [0x7e, 0x11, 0x11, 0x11, 0x7e],
-        'B' => [0x7f, 0x49, 0x49, 0x49, 0x36],
-        'C' => [0x3e, 0x41, 0x41, 0x41, 0x22],
-        'D' => [0x7f, 0x41, 0x41, 0x22, 0x1c],
-        'E' => [0x7f, 0x49, 0x49, 0x49, 0x41],
-        'F' => [0x7f, 0x09, 0x09, 0x09, 0x01],
-        'G' => [0x3e, 0x41, 0x49, 0x49, 0x7a],
-        'H' => [0x7f, 0x08, 0x08, 0x08, 0x7f],
-        'I' => [0x00, 0x41, 0x7f, 0x41, 0x00],
-        'J' => [0x20, 0x40, 0x41, 0x3f, 0x01],
-        'K' => [0x7f, 0x08, 0x14, 0x22, 0x41],
-        'L' => [0x7f, 0x40, 0x40, 0x40, 0x40],
-        'M' => [0x7f, 0x02, 0x0c, 0x02, 0x7f],
-        'N' => [0x7f, 0x04, 0x08, 0x10, 0x7f],
-        'O' => [0x3e, 0x41, 0x41, 0x41, 0x3e],
-        'P' => [0x7f, 0x09, 0x09, 0x09, 0x06],
-        'Q' => [0x3e, 0x41, 0x51, 0x21, 0x5e],
-        'R' => [0x7f, 0x09, 0x19, 0x29, 0x46],
-        'S' => [0x46, 0x49, 0x49, 0x49, 0x31],
-        'T' => [0x01, 0x01, 0x7f, 0x01, 0x01],
-        'U' => [0x3f, 0x40, 0x40, 0x40, 0x3f],
-        'V' => [0x1f, 0x20, 0x40, 0x20, 0x1f],
-        'W' => [0x3f, 0x40, 0x38, 0x40, 0x3f],
-        'X' => [0x63, 0x14, 0x08, 0x14, 0x63],
-        'Y' => [0x07, 0x08, 0x70, 0x08, 0x07],
-        'Z' => [0x61, 0x51, 0x49, 0x45, 0x43],
-        '0' => [0x3e, 0x51, 0x49, 0x45, 0x3e],
-        '1' => [0x00, 0x42, 0x7f, 0x40, 0x00],
-        '2' => [0x42, 0x61, 0x51, 0x49, 0x46],
-        '3' => [0x21, 0x41, 0x45, 0x4b, 0x31],
-        '4' => [0x18, 0x14, 0x12, 0x7f, 0x10],
-        '5' => [0x27, 0x45, 0x45, 0x45, 0x39],
-        '6' => [0x3c, 0x4a, 0x49, 0x49, 0x30],
-        '7' => [0x01, 0x71, 0x09, 0x05, 0x03],
-        '8' => [0x36, 0x49, 0x49, 0x49, 0x36],
-        '9' => [0x06, 0x49, 0x49, 0x29, 0x1e],
-        '-' => [0x08, 0x08, 0x08, 0x08, 0x08],
-        '_' => [0x40, 0x40, 0x40, 0x40, 0x40],
-        '.' => [0x00, 0x60, 0x60, 0x00, 0x00],
-        ':' => [0x00, 0x36, 0x36, 0x00, 0x00],
-        '/' => [0x20, 0x10, 0x08, 0x04, 0x02],
-        '+' => [0x08, 0x08, 0x3e, 0x08, 0x08],
-        ' ' => [0; 5],
-        _ => [0x02, 0x01, 0x51, 0x09, 0x06],
     }
 }

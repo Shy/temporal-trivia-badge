@@ -11,7 +11,7 @@ use std::{
     str::FromStr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI32, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -60,6 +60,8 @@ const WORKER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const MAX_ACTIVITY_RUNTIME: Duration = Duration::from_secs(120);
 const POWERUP_OVERLAY: Duration = Duration::from_millis(1_500);
 const POWERUP_FRESHNESS_MS: u64 = 5_000;
+/// Long enough to read the verdict before the waiting screen returns.
+const FEEDBACK_HOLD: Duration = Duration::from_millis(1_100);
 const GAME_SIGNAL_TIMEOUT: Duration = Duration::from_millis(750);
 const ACTIVE_WORKFLOW_ID: &str = "temporal-trivia-active";
 
@@ -108,6 +110,10 @@ struct BadgeActivities {
     activity_active: Arc<AtomicBool>,
     powerup_active: Arc<AtomicBool>,
     current_question: SharedQuestion,
+    /// Points a correct answer is currently worth, refreshed by the power-up
+    /// poller. The badge shows feedback before the Workflow scores the answer,
+    /// so without this it would always claim 1 even under double points.
+    point_value: Arc<AtomicI32>,
 }
 
 struct ResultWatcher {
@@ -229,7 +235,13 @@ impl BadgeActivities {
         {
             Choice::Answer(selected_index) => {
                 let correct = selected_index == task.question.correct_index;
-                show_feedback(&self.display, &self.identity.callsign, correct)?;
+                let points = self.point_value.load(Ordering::Acquire);
+                show_feedback(
+                    &self.display,
+                    &self.identity.callsign,
+                    correct,
+                    if correct { points } else { -points },
+                )?;
                 haptics::play(
                     &self.haptics,
                     if correct {
@@ -239,7 +251,7 @@ impl BadgeActivities {
                     },
                 )
                 .await;
-                tokio::time::sleep(Duration::from_millis(350)).await;
+                tokio::time::sleep(FEEDBACK_HOLD).await;
                 show_waiting(&self.display, &self.identity.callsign)?;
                 let answer = BadgeAnswer {
                     badge_id: self.identity.id.clone(),
@@ -560,6 +572,7 @@ async fn run_worker(
     tuner.activity_slot_supplier(Arc::new(FixedSizeSlotSupplier::<ActivitySlotKind>::new(1)));
     let activity_active = Arc::new(AtomicBool::new(false));
     let powerup_active = Arc::new(AtomicBool::new(false));
+    let point_value = Arc::new(AtomicI32::new(1));
     let current_question = Arc::new(Mutex::new(None));
     let worker_identity = format!("badge/{}", identity.callsign);
     let worker_options = WorkerOptions::new(BADGE_TASK_QUEUE)
@@ -577,6 +590,7 @@ async fn run_worker(
             result_watcher: Mutex::new(None),
             activity_active: Arc::clone(&activity_active),
             powerup_active: Arc::clone(&powerup_active),
+            point_value: Arc::clone(&point_value),
             current_question: Arc::clone(&current_question),
         })
         .build();
@@ -600,6 +614,7 @@ async fn run_worker(
             powerup_callsign,
             current_question,
             powerup_flag,
+            point_value,
         )
         .await;
     });
@@ -629,6 +644,7 @@ async fn monitor_powerups(
     callsign: String,
     current_question: SharedQuestion,
     powerup_active: Arc<AtomicBool>,
+    point_value: Arc<AtomicI32>,
 ) {
     let handle = client.get_workflow_handle::<GameWorkflowRun>(ACTIVE_WORKFLOW_ID);
     let mut game_id = None;
@@ -638,6 +654,11 @@ async fn monitor_powerups(
             .query(GameWorkflow::snapshot, (), WorkflowQueryOptions::default())
             .await
         {
+            let doubled = snapshot
+                .chaos
+                .double_points_until_unix_ms
+                .is_some_and(|until| until > unix_ms());
+            point_value.store(if doubled { 2 } else { 1 }, Ordering::Release);
             if snapshot.game_id != game_id {
                 game_id.clone_from(&snapshot.game_id);
                 sequence = 0;
@@ -701,11 +722,16 @@ fn show_question(display: &SharedDisplay, callsign: &str, task: &QuestionTask) -
         .show_question(callsign, &task.question)
 }
 
-fn show_feedback(display: &SharedDisplay, callsign: &str, correct: bool) -> Result<()> {
+fn show_feedback(
+    display: &SharedDisplay,
+    callsign: &str,
+    correct: bool,
+    score_delta: i32,
+) -> Result<()> {
     display
         .lock()
         .map_err(|_| anyhow!("display lock poisoned"))?
-        .show_feedback(callsign, correct, if correct { 1 } else { -1 })
+        .show_feedback(callsign, correct, score_delta)
 }
 
 fn show_panic(display: &SharedDisplay, callsign: &str) -> Result<()> {

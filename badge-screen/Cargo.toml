@@ -1,0 +1,11 @@
+[package]
+name = "badge-screen"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Everything here is pure framebuffer work with no ESP-IDF dependency, so the
+# badge's screens can be unit tested and previewed on a development host.
+
+[dependencies]
+temporal-trivia-shared = { path = "../shared" }
